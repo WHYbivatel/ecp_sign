@@ -1,0 +1,15 @@
+dist/
+node_modules/
+*.p12
+*.pfx
+*.pem
+*.key
+.DS_Store
+artifacts/
+
+.env
+.env.*
+!.env.example
+*.jks
+*.p8
+*.log

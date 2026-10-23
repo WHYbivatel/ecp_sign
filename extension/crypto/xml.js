@@ -1,0 +1,63 @@
+import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
+import { ExclusiveCanonicalization } from 'xml-crypto/lib/exclusive-canonicalization.js';
+import { O, utf8, base64 } from './encoding.js';
+
+const DS = 'http://www.w3.org/2000/09/xmldsig#';
+const C14N = 'http://www.w3.org/2001/10/xml-exc-c14n#';
+const ENVELOPED = `${DS}enveloped-signature`;
+const algorithms = {
+  [O.rsa]: ['http://www.w3.org/2001/04/xmldsig-more#rsa-sha256', 'http://www.w3.org/2001/04/xmlenc#sha256'],
+  [O.gost512]: ['urn:ietf:params:xml:ns:pkigovkz:xmlsec:algorithms:gostr34102015-gostr34112015-512', 'urn:ietf:params:xml:ns:pkigovkz:xmlsec:algorithms:gostr34112015-512'],
+  [O.gost2004]: ['http://www.w3.org/2001/04/xmldsig-more#gost34310-gost34311', 'http://www.w3.org/2001/04/xmldsig-more#gost34311']
+};
+
+export function parseXml(xml) {
+  if (typeof xml !== 'string' || !xml.trim() || xml.length > 2 * 1024 * 1024) throw new Error('XML пуст или превышает 2 МБ.');
+  if (/<!DOCTYPE|<!ENTITY/i.test(xml)) throw new Error('XML с DTD или объявлениями сущностей не поддерживается.');
+  const doc = new DOMParser({ onError(level, message) { throw new Error(`Некорректный XML: ${message}`); } }).parseFromString(xml, 'application/xml');
+  if (!doc.documentElement) throw new Error('В XML отсутствует корневой элемент.');
+  let count = 0;
+  function visit(node, depth = 0) {
+    if (++count > 50000 || depth > 64) throw new Error('Слишком сложный XML.');
+    for (let child = node.firstChild; child; child = child.nextSibling) visit(child, depth + 1);
+  }
+  visit(doc);
+  return doc;
+}
+
+export async function signXml(signer, xml) {
+  if (!algorithms[signer.info.keyOid]) throw new Error('XMLDSig для ГОСТ-256 не подтверждён официальным Kalkan. Используйте CMS/CAdES или другой сертификат.');
+  const doc = parseXml(xml);
+  if (doc.getElementsByTagNameNS(DS, 'Signature').length) throw new Error('Доподписание XML с существующей подписью пока не поддерживается.');
+  const [signatureAlgorithm, digestAlgorithm] = algorithms[signer.info.keyOid];
+  const canon = new ExclusiveCanonicalization();
+  const digest = base64(await signer.digest(utf8(canon.process(doc))));
+  const element = (name, attributes = {}, text) => {
+    const node = doc.createElementNS(DS, `ds:${name}`);
+    for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, value);
+    if (text !== undefined) node.appendChild(doc.createTextNode(text));
+    return node;
+  };
+  const signature = element('Signature');
+  signature.setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:ds', DS);
+  const signedInfo = element('SignedInfo');
+  signedInfo.appendChild(element('CanonicalizationMethod', { Algorithm: C14N }));
+  signedInfo.appendChild(element('SignatureMethod', { Algorithm: signatureAlgorithm }));
+  const reference = element('Reference', { URI: '' });
+  const transforms = element('Transforms');
+  transforms.appendChild(element('Transform', { Algorithm: ENVELOPED }));
+  transforms.appendChild(element('Transform', { Algorithm: C14N }));
+  reference.appendChild(transforms);
+  reference.appendChild(element('DigestMethod', { Algorithm: digestAlgorithm }));
+  reference.appendChild(element('DigestValue', {}, digest));
+  signedInfo.appendChild(reference);
+  signature.appendChild(signedInfo);
+  doc.documentElement.appendChild(signature);
+  signature.appendChild(element('SignatureValue', {}, base64(await signer.sign(utf8(canon.process(signedInfo))))));
+  const keyInfo = element('KeyInfo');
+  const x509 = element('X509Data');
+  x509.appendChild(element('X509Certificate', {}, signer.info.summary.certificate));
+  keyInfo.appendChild(x509);
+  signature.appendChild(keyInfo);
+  return new XMLSerializer().serializeToString(doc);
+}
