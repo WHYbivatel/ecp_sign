@@ -5,6 +5,20 @@ const TTL = 3 * 60 * 1000;
 const api = globalThis.browser || chrome;
 const uiUrl = api.runtime.getURL('signing/approve.html');
 
+// Local tools live in one normal browser tab; portal approval stays isolated.
+api.action.onClicked.addListener(async tab => {
+  const home = api.runtime.getURL('index.html');
+  const tabs = await api.tabs.query({ url: [home + '*', uiUrl + '*'] });
+  const existing = tabs.find(item => item.url && !new URL(item.url).hash);
+  if (existing) {
+    await api.tabs.update(existing.id, { active: true });
+    await api.windows.update(existing.windowId, { focused: true });
+  } else {
+    const source = Number.isInteger(tab?.id) ? '&site=' + tab.id : '';
+    await api.tabs.create({ url: home + '?workspace=1' + source, ...(tab?.windowId ? { windowId: tab.windowId } : {}) });
+  }
+});
+
 function isConfirmation(sender) {
   if (sender.id !== api.runtime.id || !sender.url) return false;
   const url = new URL(sender.url);

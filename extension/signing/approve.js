@@ -3,10 +3,11 @@ import { base64, unbase64, bytes as binaryBytes } from '../lib/bytes.js';
 const $ = selector => document.querySelector(selector);
 const api = globalThis.browser || chrome;
 const id = location.hash.slice(1);
-const verifyMode = !id && new URLSearchParams(location.search).get('mode') === 'verify';
+let verifyMode = !id && new URLSearchParams(location.search).get('mode') === 'verify';
 const DOC_LIMIT = 2 * 1024 * 1024, SIGNATURE_LIMIT = 8 * 1024 * 1024;
 let request, worker, selectedCertificate, signatureFile, localName = '', generation = 0, previewGeneration = 0;
 let finished = false, busy = false, downloadUrl, deadline = Date.now() + 180000;
+let signatureInfo, createdSignature, createdName = '';
 const status = $('#status');
 const sizeLabel = count => count < 1024 ? `${count} Б` : `${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(count / 1024)} КБ`;
 const hex = value => [...value].map(byte => byte.toString(16).padStart(2, '0')).join('');
@@ -24,8 +25,9 @@ function report(text = '', error = false) {
 function updateControls() {
   $('#unlock').disabled = busy || finished || !request || !$('#key-file').files[0] || !$('#password').value;
   $('#approve').disabled = busy || finished || !worker || !selectedCertificate;
-  $('#verify-submit').disabled = busy || finished || !signatureFile;
-  for (const selector of ['#document', '#original', '#format', '#key-file', '#password', '#change-key']) $(selector).disabled = busy || finished;
+  $('#verify-submit').disabled = busy || finished || !signatureFile || !signatureInfo;
+  for (const selector of ['#document', '#format', '#key-file', '#password', '#change-key']) $(selector).disabled = busy || finished;
+  $('#original').disabled = busy || finished || !signatureInfo || signatureInfo.attached;
 }
 function lock() {
   generation++;
@@ -105,8 +107,9 @@ async function showData() {
   $('#document-hash').textContent = hashes.join('\n'); $('#document-meta').hidden = false;
 }
 
-async function localDocument() {
-  lock(); request = null; signatureFile?.fill(0); signatureFile = null;
+async function localDocument(autoVerify = false) {
+  lock(); request = null; signatureFile?.fill(0); signatureFile = null; signatureInfo = null;
+  $('#original').value = ''; $('#original-controls').hidden = true;
   const file = $('#document').files[0];
   if (!file) { await showData(); updateControls(); return; }
   localName = file.name;
@@ -119,13 +122,26 @@ async function localDocument() {
     if (current !== generation) return;
     if (verifyMode) {
       signatureFile = buffer.slice();
-      $('#preview').textContent = 'Файл подписи загружен. Нажмите «Проверить подпись». Если подпись отдельная, добавьте исходный документ.';
+      $('#preview').textContent = 'Определяем, находится ли документ внутри подписи…';
       $('#source').textContent = base64(buffer).slice(0, 100000);
       $('#operation').textContent = 'Проверка CMS / CAdES';
       $('#data-description').textContent = 'Файл и исходный документ останутся на устройстве.';
       $('#document-size').textContent = sizeLabel(buffer.length);
       $('#document-hash').textContent = hex(new Uint8Array(await crypto.subtle.digest('SHA-256', buffer)));
       $('#document-meta').hidden = false;
+      if (current !== generation) return;
+      busy = true; updateControls(); report('Определяем тип подписи…');
+      startWorker(current, async data => {
+        if (data.kind !== 'inspected') return;
+        signatureInfo = data; busy = false;
+        $('#original-controls').hidden = data.attached;
+        $('#preview').textContent = data.attached ? 'Документ уже находится внутри подписи. Исходный файл выбирать не нужно.' : 'Это отдельная подпись. Добавьте исходный документ, который подписывали.';
+        report(data.attached ? 'Файл готов к проверке.' : 'Добавьте исходный документ ниже.');
+        updateControls();
+        if (autoVerify && data.attached) await verifySelected();
+      });
+      const signature = signatureFile.slice().buffer;
+      worker.postMessage({ kind: 'inspect', signature }, [signature]);
     } else {
       const format = $('#format').value;
       request = { operation: 'sign', format: format === 'xml' ? 'xml' : 'cms',
@@ -133,10 +149,13 @@ async function localDocument() {
         decode: format !== 'xml', encapsulate: !format.endsWith('-detached'), cades: format.startsWith('cades'), timestamp: format === 'cades-t' };
       await showData();
     }
-    report(verifyMode ? '' : 'Документ загружен. Выберите ключ ЭЦП.'); updateControls();
+    if (!verifyMode) report('Документ загружен. Выберите ключ ЭЦП.'); updateControls();
   } finally { buffer.fill(0); }
 }
 for (const selector of ['#document', '#format']) $(selector).addEventListener('change', () => localDocument().catch(error => { report(error.message, true); updateControls(); }));
+$('#original').addEventListener('change', () => {
+  report($('#original').files[0] ? 'Исходный документ выбран. Можно проверить подпись.' : 'Добавьте исходный документ.'); updateControls();
+});
 $('#key-file').addEventListener('change', () => {
   lock(); const file = $('#key-file').files[0];
   $('#key-name').textContent = file?.name || 'Выбрать ключ'; $('#key-size').textContent = file ? sizeLabel(file.size) : 'Файл .p12 или .pfx';
@@ -180,6 +199,7 @@ function resultScreen({ title, description, details, download, filename, warning
     downloadUrl = URL.createObjectURL(download); $('#download').href = downloadUrl; $('#download').download = filename;
     $('#download-label').textContent = verifyMode ? 'Скачать подписанный документ' : 'Скачать подпись';
   }
+  $('#verify-created').hidden = true;
   $('#again').hidden = Boolean(id);
   $('#again').textContent = verifyMode ? 'Проверить другую подпись' : 'Подписать ещё один файл';
 }
@@ -209,7 +229,13 @@ $('#key-form').addEventListener('submit', async event => {
             details: `${localName}\n${certificate.name}\n${stamp ? 'Метка НУЦ: ' + new Date(stamp.time).toLocaleString('ru-RU') : 'Подпись создана локально, без метки времени.'}`,
             download: new Blob([value], { type: xml ? 'application/xml' : 'application/pkcs7-mime' }),
             filename: (localName || 'document').replace(/[\\/]/g, '_') + (xml ? '.signed.xml' : '.p7s') });
-          if (value instanceof Uint8Array) value.fill(0);
+          if (value instanceof Uint8Array) {
+            createdSignature?.fill(0);
+            createdSignature = request.encapsulate ? value.slice() : null;
+            createdName = (localName || 'document') + '.p7s';
+            $('#verify-created').hidden = !createdSignature;
+            value.fill(0);
+          }
         }
       }
     });
@@ -232,12 +258,13 @@ $('#approve').addEventListener('click', async () => {
     worker.postMessage({ kind: 'sign', request });
   } catch (error) { lock(); report(error.message, true); }
 });
-$('#verify-submit').addEventListener('click', async () => {
-  if (busy || finished || !signatureFile) return;
+async function verifySelected() {
+  if (busy || finished || !signatureFile || !signatureInfo) return;
+  if (!signatureInfo.attached && !$('#original').files[0]) { report('Для этой отдельной подписи нужен исходный документ. Выберите файл, который подписывали.', true); return; }
   let original;
   try {
     lock(); const current = generation; busy = true; updateControls(); report('Проверяем подпись и цепочку сертификата…');
-    const file = $('#original').files[0];
+    const file = signatureInfo.attached ? undefined : $('#original').files[0];
     if (file?.size > DOC_LIMIT) throw new Error('Исходный документ превышает 2 МБ.');
     original = file ? await file.arrayBuffer() : undefined;
     if (current !== generation) return;
@@ -248,27 +275,66 @@ $('#verify-submit').addEventListener('click', async () => {
       const details = data.signers.map(signer => `${signer.name}\n${signer.algorithm}\n${signer.trust.trusted ? 'Цепочка НУЦ РК подтверждена' : 'Цепочка доверия не подтверждена'}`).join('\n\n');
       resultScreen({ title: 'Подпись верна', description: 'Содержимое соответствует криптографической подписи.',
         details: details + '\n\n' + (data.timestamps.length ? `Метка времени: ${new Date(data.timestamps[0].time).toLocaleString('ru-RU')}\n` : '') + 'Статус отзыва сертификатов не проверялся.',
-        warning: !trusted, download: new Blob([content], { type: 'application/octet-stream' }), filename: 'signed-document.bin' });
+        warning: !trusted, download: new Blob([content], { type: 'application/octet-stream' }), filename: (localName.replace(/\.(p7s|p7m|cms)$/i, '') || 'signed-document') + ( /\.[a-z0-9]{1,8}$/i.test(localName.replace(/\.(p7s|p7m|cms)$/i, '')) ? '' : '.bin') });
       content.fill(0);
     });
     const signature = signatureFile.slice().buffer;
     worker.postMessage({ kind: 'verify', signature, original }, original ? [signature, original] : [signature]); original = null;
   } catch (error) { lock(); report(error.message, true); }
   finally { if (original?.byteLength) new Uint8Array(original).fill(0); }
-});
+}
+$('#verify-submit').addEventListener('click', verifySelected);
 $('#cancel').addEventListener('click', async () => {
-  finished = true; lock(); if (id) await message('nca:cancel').catch(() => {}); window.close();
+  finished = true; lock();
+  if (id) { await message('nca:cancel').catch(() => {}); window.close(); }
+  else location.assign(api.runtime.getURL('index.html?workspace=1'));
 });
-$('#again').addEventListener('click', () => {
-  finished = false; lock(); request = null; signatureFile?.fill(0); signatureFile = null;
+function localMode(mode, push = true) {
+  if (id) return;
+  verifyMode = mode === 'verify'; finished = false; lock(); previewGeneration++;
+  request = null; signatureInfo = null;
+  signatureFile?.fill(0); signatureFile = null; createdSignature?.fill(0); createdSignature = null;
   for (const selector of ['#document', '#original', '#key-file']) $(selector).value = '';
-  $('#document-label').textContent = verifyMode ? 'Выберите файл подписи' : 'Выберите или перетащите файл';
+  $('#format').value = 'cms'; $('#advanced-settings').open = false;
   $('#key-name').textContent = 'Выбрать ключ'; $('#key-size').textContent = 'Файл .p12 или .pfx';
   $('#workspace').hidden = false; $('#result-screen').hidden = true; $('.approval-footer').hidden = false;
+  $('#local-controls').hidden = false; $('#original-controls').hidden = true; $('#tool-nav').hidden = false;
+  document.body.toggleAttribute('data-verify', verifyMode);
+  $('#nav-sign').setAttribute('aria-current', verifyMode ? 'false' : 'page'); $('#nav-verify').setAttribute('aria-current', verifyMode ? 'page' : 'false');
+  $('#title').textContent = verifyMode ? 'Проверить подпись' : 'Подписать документ';
+  $('#subtitle').textContent = verifyMode ? 'Выберите подписанный файл. Ключ ЭЦП не нужен.' : 'Выберите документ, откройте ключ и подтвердите подпись.';
+  $('#step').hidden = verifyMode; $('#operation').textContent = verifyMode ? 'Проверка подписи' : '';
+  $('#file-heading').textContent = verifyMode ? 'Подписанный файл' : 'Документ';
+  $('#document').accept = verifyMode ? '.p7s,.p7m,.cms' : '';
+  $('#document-label').textContent = verifyMode ? 'Выберите подписанный файл' : 'Выберите или перетащите файл';
+  $('#document-hint').textContent = verifyMode ? '.p7s, .p7m или .cms · до 8 МБ' : 'До 2 МБ · данные обрабатываются локально';
+  $('#format-controls').hidden = verifyMode; $('#key-form').hidden = verifyMode; $('#verify-info').hidden = !verifyMode;
+  $('#approve').hidden = verifyMode; $('#verify-submit').hidden = !verifyMode;
+  $('#cancel').textContent = 'На главную';
+  $('#footer-note').lastChild.textContent = verifyMode ? 'Данные не отправляются в сеть' : 'Подпись только с вашего согласия';
+  $('.privacy-label').lastChild.textContent = verifyMode ? 'Проверка без передачи файлов' : 'Ваш ключ — только на устройстве';
+  $('.security-note p').textContent = verifyMode ? 'Документ и подпись обрабатываются локально. Ключ ЭЦП не требуется.' : 'Закрытый ключ не передаётся сайту. Подпись создаётся в вашем браузере.';
+  $('#tab-preview').click();
   if (downloadUrl) { URL.revokeObjectURL(downloadUrl); downloadUrl = null; }
-  deadline = Date.now() + 180000; showData().catch(error => report(error.message, true)); updateControls(); report();
+  deadline = Date.now() + 180000;
+  showData().catch(error => report(error.message, true)); updateControls(); report();
+  if (push) history.pushState({ mode }, '', verifyMode ? '?mode=verify' : location.pathname);
+}
+for (const mode of ['sign', 'verify']) $('#nav-' + mode).addEventListener('click', event => { event.preventDefault(); localMode(mode); });
+window.addEventListener('popstate', () => { if (!id) localMode(new URLSearchParams(location.search).get('mode'), false); });
+$('#again').addEventListener('click', () => localMode(verifyMode ? 'verify' : 'sign', false));
+$('#verify-created').addEventListener('click', async () => {
+  if (!createdSignature) return;
+  const value = createdSignature.slice(); const name = createdName;
+  localMode('verify');
+  try {
+    const transfer = new DataTransfer(); transfer.items.add(new File([value], name, { type: 'application/pkcs7-mime' }));
+    $('#document').files = transfer.files;
+    await localDocument(true);
+  } catch (error) { report(error.message, true); }
+  finally { value.fill(0); }
 });
-window.addEventListener('pagehide', () => { lock(); signatureFile?.fill(0); if (downloadUrl) URL.revokeObjectURL(downloadUrl); });
+window.addEventListener('pagehide', () => { lock(); signatureFile?.fill(0); createdSignature?.fill(0); if (downloadUrl) URL.revokeObjectURL(downloadUrl); });
 setInterval(() => {
   if (finished || Date.now() < deadline) return;
   finished = true; lock(); report('Время операции истекло. Повторите запрос или откройте инструмент заново.', true);
@@ -282,20 +348,7 @@ async function init() {
       $('#origin').textContent = record.origin;
       if (request.operation === 'info') { $('#title').textContent = 'Передать сведения'; $('#approve-label').textContent = 'Передать сведения'; }
       await showData();
-    } else {
-      $('#local-controls').hidden = false;
-      if (verifyMode) {
-        $('#title').textContent = 'Проверить подпись'; $('#subtitle').textContent = 'Проверьте документ и его подписанта без ключа ЭЦП.';
-        $('#step').hidden = true; $('#file-heading').textContent = 'Файл подписи'; $('#document').accept = '.p7s,.p7m,.cms';
-        $('#document-label').textContent = 'Выберите файл подписи'; $('#document-hint').textContent = 'CMS или CAdES · до 8 МБ';
-        $('#format-controls').hidden = true; $('#original-controls').hidden = false;
-        $('#key-form').hidden = true; $('#verify-info').hidden = false; $('#approve').hidden = true; $('#verify-submit').hidden = false;
-        $('#footer-note').lastChild.textContent = 'Данные не отправляются в сеть';
-        $('.privacy-label').lastChild.textContent = 'Проверка без передачи файлов';
-        $('.security-note p').textContent = 'Документ и подпись обрабатываются локально. Ключ ЭЦП не требуется.';
-        await showData();
-      }
-    }
+    } else localMode(verifyMode ? 'verify' : 'sign', false);
     updateControls();
   } catch (error) { finished = true; lock(); report(error.message, true); }
 }

@@ -1,12 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Tegin · локальная ЭЦП",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "minimum_chrome_version": "111",
   "description": "Локальная электронная подпись ГОСТ/RSA. Подписание CMS/CAdES и XML в браузере.",
   "action": {
     "default_title": "Tegin",
-    "default_popup": "index.html",
     "default_icon": {
       "16": "assets/icon-16.png",
       "32": "assets/icon-32.png"

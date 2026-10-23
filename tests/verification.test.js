@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { rsaFixture, gostFixture, PASSWORD } from './helpers/fixtures.js';
 import { openContainer, certificateInfo } from '../extension/crypto/signer.js';
 import { signCms } from '../extension/crypto/cms.js';
-import { verifyCms } from '../extension/crypto/cms-verify.js';
+import { verifyCms, describeCms } from '../extension/crypto/cms-verify.js';
 import { verifyChain } from '../extension/crypto/chain.js';
 import { trustStore } from '../extension/crypto/trust-store.js';
 import { makeTimestampRequest, verifyTimestampResponse, TSA_POLICY } from '../extension/crypto/timestamp.js';
@@ -15,6 +15,9 @@ for (const [family, makeFixture] of [['RSA', rsaFixture], ['GOST512', gostFixtur
   try {
     for (const cades of [false, true]) for (const encapsulate of [false, true]) {
       const raw = await signCms(signer, data, { cades, encapsulate });
+      const info = describeCms(raw);
+      assert.equal(info.attached, encapsulate); assert.equal(info.contentLength, encapsulate ? data.length : null);
+      if (encapsulate) await assert.rejects(verifyCms(raw, { detached: raw }), /не совпадает с вложенными/);
       const verified = await verifyCms(raw, { detached: encapsulate ? undefined : data });
       assert.equal(verified.valid, true); assert.equal(verified.signers[0].cades, cades);
       assert.equal(verified.signers[0].trust.trusted, false);

@@ -8,7 +8,7 @@ function octets(node, depth = 0) {
   if (depth > 24 || node?.type !== A.Type.OCTETSTRING) throw new Error('Некорректные данные CMS.');
   return typeof node.value === 'string' ? node.value : node.value.map(child => octets(child, depth + 1)).join('');
 }
-export function readCms(raw, detached) {
+export function readCms(raw, detached, { allowMissingDocument = false } = {}) {
   if (raw.length > 8 * 1024 * 1024) throw new Error('Подпись превышает 8 МБ.');
   const root = parse(raw);
   if (oidValue(root.value[0]) !== O.signedData) throw new Error('Ожидается CMS SignedData.');
@@ -18,12 +18,18 @@ export function readCms(raw, detached) {
   const attached = encapsulated.value[1] ? bytes(octets(encapsulated.value[1].value[0])) : null;
   if (attached && detached && !equalBytes(attached, detached)) throw new Error('Документ не совпадает с вложенными данными CMS.');
   const content = attached || detached;
-  if (!content) throw new Error('Для отдельной подписи нужен исходный документ.');
+  if (!content && !allowMissingDocument) throw new Error('Для отдельной подписи нужен исходный документ.');
   const certificateSet = signedData.value.find((node, index) => index > 2 && node.tagClass === A.Class.CONTEXT_SPECIFIC && node.type === 0);
   const certificates = (certificateSet?.value || []).filter(node => node.tagClass === 0 && node.type === A.Type.SEQUENCE).map(certificateInfo);
   const infos = signedData.value.at(-1);
   if (infos.type !== A.Type.SET || !infos.value.length || infos.value.length > 10) throw new Error('Неверный список подписантов CMS.');
   return { root, signedData, infos: infos.value, certificates, content, contentType, attached: Boolean(attached) };
+}
+
+// Envelope metadata only. This does not establish signature validity or trust.
+export function describeCms(raw) {
+  const cms = readCms(raw, undefined, { allowMissingDocument: true });
+  return { attached: cms.attached, contentLength: cms.content?.length ?? null, signerCount: cms.infos.length };
 }
 
 async function checkCertificateBinding(attributes, certificate, required) {

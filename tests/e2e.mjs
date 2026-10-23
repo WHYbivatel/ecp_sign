@@ -131,6 +131,7 @@ try {
   const tool = await context.newPage();
   await tool.setViewportSize({ width: 870, height: 850 });
   await tool.goto(`chrome-extension://${extensionId}/signing/approve.html`);
+  assert.equal(await tool.locator('#format').isVisible(), false);
   await tool.locator('#document').setInputFiles({ name: 'test.txt', mimeType: 'text/plain', buffer: data });
   await tool.locator('#key-file').setInputFiles({ name: 'test.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(fixture.container) });
   await tool.locator('#password').fill(PASSWORD); await tool.locator('#unlock').click();
@@ -139,10 +140,22 @@ try {
   await tool.locator('#result-title').filter({ hasText: 'Документ подписан' }).waitFor();
   const downloadWait = tool.waitForEvent('download'); await tool.locator('#download').click();
   const downloaded = await downloadWait; const localPath = join(folder, 'local.p7s'); await downloaded.saveAs(localPath);
-  await tool.locator('#again').click(); assert.equal(await tool.locator('#password').inputValue(), '');
+  await tool.locator('#verify-created').click();
+  await tool.locator('#result-title').filter({ hasText: 'Подпись верна' }).waitFor();
+  assert.match(tool.url(), /mode=verify/);
+  await tool.goBack();
+  await tool.locator('#title').filter({ hasText: 'Подписать документ' }).waitFor();
+  assert.equal(await tool.locator('#password').inputValue(), '');
+  await tool.locator('#nav-verify').click();
+  await tool.locator('#title').filter({ hasText: 'Проверить подпись' }).waitFor();
+  await tool.locator('#nav-sign').click();
+  assert.equal(await tool.locator('#password').inputValue(), '');
+  console.log('PASS: direct verification of newly signed file, same-tab mode switching, browser Back and key clearing');
   assert.equal(await tool.locator('#approve').isDisabled(), true);
   await tool.goto(`chrome-extension://${extensionId}/signing/approve.html?mode=verify`);
-  await tool.locator('#document').setInputFiles(localPath); await tool.locator('#verify-submit').click();
+  await tool.locator('#document').setInputFiles(localPath);
+  assert.equal(await tool.locator('#original-controls').isVisible(), false);
+  await tool.locator('#verify-submit').click();
   await tool.locator('#result-title').filter({ hasText: 'Подпись верна' }).waitFor();
   await tool.screenshot({ path: resolve('artifacts/verification.png'), fullPage: true });
   console.log('PASS: local file signing, download, reset and CMS verification without a key');
@@ -156,25 +169,65 @@ try {
   await tool.locator('#verify-submit').click();
   await tool.locator('#result-title').filter({ hasText: 'Подпись верна' }).waitFor();
   console.log('PASS: detached verification requires original document and recovers after missing-document error');
+  await tool.locator('#again').click();
+  await tool.locator('#document').setInputFiles({ name: 'detached.p7s', mimeType: 'application/pkcs7-signature', buffer: Buffer.from(answer.responseObject, 'base64') });
+  await tool.locator('#original').waitFor({ state: 'visible' });
+  await tool.locator('#original').setInputFiles({ name: 'wrong.txt', mimeType: 'text/plain', buffer: Buffer.from('wrong document') });
+  await tool.locator('#verify-submit').click(); await tool.locator('#status[data-error]').waitFor();
+  await tool.locator('#document').setInputFiles(localPath);
+  await tool.locator('#verify-submit:not([disabled])').waitFor();
+  assert.equal(await tool.locator('#original').inputValue(), '');
+  assert.equal(await tool.locator('#original-controls').isVisible(), false);
+  await tool.locator('#verify-submit').click();
+  await tool.locator('#result-title').filter({ hasText: 'Подпись верна' }).waitFor();
+  console.log('PASS: changed detached original rejected; switching to attached CMS clears stale original and verifies');
+  await tool.locator('#again').click();
+  const damaged = Buffer.from(readFileSync(localPath)); damaged[damaged.length - 1] ^= 1;
+  await tool.locator('#document').setInputFiles({ name: 'damaged.p7s', mimeType: 'application/pkcs7-signature', buffer: damaged });
+  await tool.locator('#verify-submit').click(); await tool.locator('#status[data-error]').waitFor();
+  assert.equal(await tool.locator('#result-screen').isVisible(), false);
+  console.log('PASS: detecting attached content never marks a damaged signature as valid');
+
+  for (const width of [1280, 870, 400]) {
+    await tool.locator('#nav-verify').click(); await tool.setViewportSize({ width, height: 900 });
+    await tool.locator('#document').setInputFiles(localPath);
+    await tool.locator('#verify-submit:not([disabled])').waitFor();
+    await tool.screenshot({ path: resolve(`artifacts/verify-${width}.png`), fullPage: true });
+    assert.equal(await tool.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `horizontal overflow at ${width}`);
+  }
+  await tool.setViewportSize({ width: 870, height: 850 });
+
 
   if (liveTsp) {
     popup = await confirmation({ ...common, method: 'createCMSSignatureFromBase64' });
     await popup.locator('#approve').click(); answer = await result();
     assert.equal(answer.code, '200', answer.message);
     writeFileSync(join(folder, 'timestamped.p7s'), Buffer.from(answer.responseObject, 'base64'));
-    await tool.locator('#again').click();
+    await tool.locator('#nav-verify').click();
     await tool.locator('#document').setInputFiles(join(folder, 'timestamped.p7s'));
     await tool.locator('#verify-submit').click();
     await tool.locator('#result-title').filter({ hasText: 'Подпись верна' }).waitFor();
     assert.match(await tool.locator('#result-details').textContent(), /Метка времени:/);
     console.log('PASS: browser CAdES-T with live NUC TSA, then offline embedded timestamp verification');
   }
-  await tool.close();
   const popupPage = await context.newPage();
   await popupPage.setViewportSize({ width: 400, height: 600 });
   await popupPage.goto(`chrome-extension://${extensionId}/index.html`);
   await popupPage.screenshot({ path: resolve('artifacts/popup.png'), fullPage: true });
-  await popupPage.close();
+  const toolId = await tool.evaluate(() => new Promise(resolve => chrome.tabs.getCurrent(tab => resolve(tab.id))));
+  await popupPage.locator('#verify').click();
+  await tool.waitForURL(`chrome-extension://${extensionId}/signing/approve.html?mode=verify`);
+  assert.equal(await tool.evaluate(() => new Promise(resolve => chrome.tabs.getCurrent(tab => resolve(tab.id)))), toolId);
+  console.log('PASS: launcher reuses existing local tool tab');
+  await tool.goto(`chrome-extension://${extensionId}/index.html?workspace=1`);
+  await tool.locator('#local').click();
+  await tool.locator('#title').filter({ hasText: 'Подписать документ' }).waitFor();
+  assert.equal(await tool.evaluate(() => new Promise(resolve => chrome.tabs.getCurrent(tab => resolve(tab.id)))), toolId);
+  await tool.locator('#nav-home').click();
+  await tool.locator('#verify').waitFor();
+  console.log('PASS: home, sign and verify stay in one tab without separate windows');
+  await tool.close();
+  if (!popupPage.isClosed()) await popupPage.close();
 
   const opened = context.waitForEvent('page');
   await send(common);

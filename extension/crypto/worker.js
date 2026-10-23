@@ -4,7 +4,7 @@ import { signXml } from './xml.js';
 import { base64, unbase64, utf8 } from './encoding.js';
 import { verifyChain } from './chain.js';
 import { forge, bytes as binaryBytes } from './encoding.js';
-import { verifyCms } from './cms-verify.js';
+import { verifyCms, describeCms } from './cms-verify.js';
 import { verifyEmbeddedTimestamp } from './timestamp.js';
 import { A, oidValue } from './encoding.js';
 
@@ -36,6 +36,11 @@ self.onmessage = async ({ data }) => {
       signer.info.summary.fingerprint = [...new Uint8Array(await crypto.subtle.digest('SHA-256', binaryBytes(signer.info.raw)))].map(value => value.toString(16).padStart(2, '0')).join('');
       checkConstraints(request);
       self.postMessage({ kind: 'opened', certificate: { ...signer.info.summary, trust } });
+    } else if (data.kind === 'inspect') {
+      const raw = new Uint8Array(data.signature);
+      try { self.postMessage({ kind: 'inspected', ...describeCms(raw) }); }
+      finally { raw.fill(0); }
+      self.close();
     } else if (data.kind === 'verify') {
       const raw = new Uint8Array(data.signature);
       const original = data.original ? new Uint8Array(data.original) : undefined;

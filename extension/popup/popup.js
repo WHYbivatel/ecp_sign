@@ -2,15 +2,27 @@ const api = globalThis.browser || chrome;
 const status = document.querySelector('#status');
 const enable = document.querySelector('#enable');
 let current;
-function openTool(mode = '') {
-  api.windows.create({ url: api.runtime.getURL(`signing/approve.html${mode ? '?mode=' + mode : ''}`), type: 'popup', width: 870, height: 850 });
-  window.close();
+async function openTool(mode = '') {
+  try {
+    const base = api.runtime.getURL('signing/approve.html');
+    const url = base + (mode ? '?mode=' + mode : '');
+    if (new URLSearchParams(location.search).has('workspace')) { location.assign(url); return; }
+    const tabs = await api.tabs.query({ url: base + '*' });
+    const existing = tabs.find(tab => !new URL(tab.url).hash);
+    if (existing) {
+      await api.tabs.update(existing.id, { active: true, ...(existing.url === url ? {} : { url }) });
+      await api.windows.update(existing.windowId, { focused: true });
+    } else await api.tabs.create({ url });
+    if (!new URLSearchParams(location.search).has('workspace')) window.close();
+  } catch (error) { status.textContent = error.message; }
 }
+if (new URLSearchParams(location.search).has('workspace')) document.body.setAttribute('data-workspace', '');
 document.querySelector('#local').addEventListener('click', () => openTool());
 document.querySelector('#verify').addEventListener('click', () => openTool('verify'));
 async function loadSite() {
   try {
-    const [tab] = await api.tabs.query({ active: true, currentWindow: true });
+    const sourceId = new URLSearchParams(location.search).get('site');
+    const tab = sourceId && /^\d+$/.test(sourceId) ? await api.tabs.get(Number(sourceId)) : (await api.tabs.query({ active: true, currentWindow: true }))[0];
     if (!tab?.url) throw new Error('Откройте обычную страницу сайта.');
     const url = new URL(tab.url);
     const local = url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname);
