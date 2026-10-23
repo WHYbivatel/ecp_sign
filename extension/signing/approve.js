@@ -7,7 +7,7 @@ let verifyMode = !id && new URLSearchParams(location.search).get('mode') === 've
 const DOC_LIMIT = 2 * 1024 * 1024, SIGNATURE_LIMIT = 8 * 1024 * 1024;
 let request, worker, selectedCertificate, signatureFile, localName = '', generation = 0, previewGeneration = 0;
 let finished = false, busy = false, downloadUrl, deadline = Date.now() + 180000;
-let signatureInfo, createdSignature, createdName = '';
+let signatureInfo, createdSignature, createdName = '', viewAnimation;
 const status = $('#status');
 const sizeLabel = count => count < 1024 ? `${count} Б` : `${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(count / 1024)} КБ`;
 const hex = value => [...value].map(byte => byte.toString(16).padStart(2, '0')).join('');
@@ -38,7 +38,7 @@ function lock() {
   $('#show-password').setAttribute('aria-label', 'Показать пароль');
   $('#certificate').hidden = true;
   $('#key-form').hidden = verifyMode;
-  $('#step').textContent = '01 / 02';
+  $('#step').textContent = verifyMode ? 'Без ключа' : '01 / 02';
   updateControls();
 }
 function dropTarget(label, input) {
@@ -70,7 +70,7 @@ $('#change-key').addEventListener('click', () => { lock(); report('Введит�
 async function showData() {
   const revision = ++previewGeneration;
   $('#preview').textContent = verifyMode ? 'Выберите файл CMS/CAdES для проверки.' : 'Выберите документ для подписи.'; $('#source').textContent = '';
-  if (verifyMode) $('#data-description').textContent = 'Проверка подписи не требует ключа ЭЦП.';
+  $('#data-description').textContent = verifyMode ? 'Проверка подписи не требует ключа ЭЦП.' : 'Выберите документ, который нужно подписать.';
   $('#document-meta').hidden = true; $('#timestamp-note').hidden = !request?.timestamp;
   $('#document-count').textContent = '';
   if (!request) return;
@@ -187,6 +187,10 @@ function startWorker(current, handler) {
     } catch (error) { lock(); report(error.message, true); }
   };
 }
+function animateView(element) {
+  viewAnimation?.cancel(); viewAnimation = null;
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) viewAnimation = element.animate([{ opacity: .6 }, { opacity: 1 }], { duration: 170, easing: 'ease-out' });
+}
 function resultScreen({ title, description, details, download, filename, warning = false }) {
   finished = true; lock(); $('#key-file').value = '';
   $('#workspace').hidden = true; $('#result-screen').hidden = false; $('.approval-footer').hidden = true;
@@ -199,6 +203,7 @@ function resultScreen({ title, description, details, download, filename, warning
     downloadUrl = URL.createObjectURL(download); $('#download').href = downloadUrl; $('#download').download = filename;
     $('#download-label').textContent = verifyMode ? 'Скачать подписанный документ' : 'Скачать подпись';
   }
+  animateView($('#result-screen'));
   $('#verify-created').hidden = true;
   $('#again').hidden = Boolean(id);
   $('#again').textContent = verifyMode ? 'Проверить другую подпись' : 'Подписать ещё один файл';
@@ -303,14 +308,15 @@ function localMode(mode, push = true) {
   $('#nav-sign').setAttribute('aria-current', verifyMode ? 'false' : 'page'); $('#nav-verify').setAttribute('aria-current', verifyMode ? 'page' : 'false');
   $('#title').textContent = verifyMode ? 'Проверить подпись' : 'Подписать документ';
   $('#subtitle').textContent = verifyMode ? 'Выберите подписанный файл. Ключ ЭЦП не нужен.' : 'Выберите документ, откройте ключ и подтвердите подпись.';
-  $('#step').hidden = verifyMode; $('#operation').textContent = verifyMode ? 'Проверка подписи' : '';
+  $('#step').hidden = false; $('#step').textContent = verifyMode ? 'Без ключа' : '01 / 02'; $('#operation').textContent = verifyMode ? 'Проверка подписи' : '';
   $('#file-heading').textContent = verifyMode ? 'Подписанный файл' : 'Документ';
   $('#document').accept = verifyMode ? '.p7s,.p7m,.cms' : '';
   $('#document-label').textContent = verifyMode ? 'Выберите подписанный файл' : 'Выберите или перетащите файл';
   $('#document-hint').textContent = verifyMode ? '.p7s, .p7m или .cms · до 8 МБ' : 'До 2 МБ · данные обрабатываются локально';
   $('#format-controls').hidden = verifyMode; $('#key-form').hidden = verifyMode; $('#verify-info').hidden = !verifyMode;
   $('#approve').hidden = verifyMode; $('#verify-submit').hidden = !verifyMode;
-  $('#cancel').textContent = 'На главную';
+  $('#cancel').hidden = true;
+  $('#verify-upload-hint').hidden = !verifyMode;
   $('#footer-note').lastChild.textContent = verifyMode ? 'Данные не отправляются в сеть' : 'Подпись только с вашего согласия';
   $('.privacy-label').lastChild.textContent = verifyMode ? 'Проверка без передачи файлов' : 'Ваш ключ — только на устройстве';
   $('.security-note p').textContent = verifyMode ? 'Документ и подпись обрабатываются локально. Ключ ЭЦП не требуется.' : 'Закрытый ключ не передаётся сайту. Подпись создаётся в вашем браузере.';
@@ -318,8 +324,16 @@ function localMode(mode, push = true) {
   if (downloadUrl) { URL.revokeObjectURL(downloadUrl); downloadUrl = null; }
   deadline = Date.now() + 180000;
   showData().catch(error => report(error.message, true)); updateControls(); report();
-  if (push) history.pushState({ mode }, '', verifyMode ? '?mode=verify' : location.pathname);
+  if (push) {
+    history.pushState({ mode, teginDepth: (history.state?.teginDepth || 0) + 1 }, '', verifyMode ? '?mode=verify' : location.pathname);
+    animateView($('#workspace'));
+  }
 }
+$('#nav-back').addEventListener('click', () => {
+  if (history.state?.teginDepth > 0) history.back();
+  else if (finished) localMode(verifyMode ? 'verify' : 'sign', false);
+  else location.assign(api.runtime.getURL('index.html?workspace=1'));
+});
 for (const mode of ['sign', 'verify']) $('#nav-' + mode).addEventListener('click', event => { event.preventDefault(); localMode(mode); });
 window.addEventListener('popstate', () => { if (!id) localMode(new URLSearchParams(location.search).get('mode'), false); });
 $('#again').addEventListener('click', () => localMode(verifyMode ? 'verify' : 'sign', false));

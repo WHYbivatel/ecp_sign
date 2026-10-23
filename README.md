@@ -3,9 +3,9 @@
 Браузерное расширение для локального подписания ключами ЭЦП НУЦ РК.
 **Конечному пользователю не нужны NCALayer, Java, native host или локальный сервер.**
 
-**Скачать Tegin 0.4.0:**
-[Chrome / Edge / Chromium](https://github.com/WHYbivatel/ecp_sign/releases/download/v0.4.0/tegin-chromium-0.4.0.zip) ·
-[Firefox](https://github.com/WHYbivatel/ecp_sign/releases/download/v0.4.0/tegin-firefox-0.4.0.zip) ·
+**Скачать Tegin 0.4.1:**
+[Chrome / Edge / Chromium](https://github.com/WHYbivatel/ecp_sign/releases/download/v0.4.1/tegin-chromium-0.4.1.zip) ·
+[Firefox](https://github.com/WHYbivatel/ecp_sign/releases/download/v0.4.1/tegin-firefox-0.4.1.zip) ·
 [Инструкция установки](INSTALL.md)
 
 Архив нужно распаковать, затем в `chrome://extensions` включить режим
@@ -13,7 +13,7 @@
 Папку после установки не удаляйте.
 
 
-Версия 0.4.0 открывает защищённые PKCS#12, формирует подпись,
+Версия 0.4.1 открывает защищённые PKCS#12, формирует подпись,
 показывает подтверждение и возвращает результат сайту. Полная совместимость
 со всеми порталами и всеми модулями NCALayer ещё не подтверждена.
 

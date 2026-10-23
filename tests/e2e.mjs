@@ -214,6 +214,31 @@ try {
   await popupPage.setViewportSize({ width: 400, height: 600 });
   await popupPage.goto(`chrome-extension://${extensionId}/index.html`);
   await popupPage.screenshot({ path: resolve('artifacts/popup.png'), fullPage: true });
+  // Switching modes keeps the same shell and card positions, with navigation at the top.
+  for (const width of [1280, 870, 400]) {
+    await tool.setViewportSize({ width, height: 900 });
+    await tool.locator('#nav-sign').click();
+    const signBoxes = await Promise.all(['#workspace', '#local-controls', '#data-panel', '#signing-column'].map(selector => tool.locator(selector).boundingBox()));
+    await tool.locator('#nav-verify').click();
+    const verifyBoxes = await Promise.all(['#workspace', '#local-controls', '#data-panel', '#signing-column'].map(selector => tool.locator(selector).boundingBox()));
+    for (let index = 0; index < signBoxes.length; index++) {
+      for (const key of ['x', 'y', 'width']) assert.ok(Math.abs(signBoxes[index][key] - verifyBoxes[index][key]) <= 1, `mode layout shift ${width} ${index} ${key}: ${signBoxes[index][key]} vs ${verifyBoxes[index][key]}`);
+    }
+    assert.equal(await tool.locator('#cancel').isVisible(), false);
+    const back = await tool.locator('#nav-back').boundingBox();
+    assert.ok(back.y < 150 && back.x < width / 2, 'Back stays in upper left');
+    await tool.evaluate(() => Promise.all(document.getAnimations().map(animation => animation.finished.catch(() => {}))));
+    await tool.screenshot({ path: resolve(`artifacts/design-verify-${width}.png`), fullPage: true });
+    await tool.locator('#nav-back').click();
+    await tool.locator('#title').filter({ hasText: 'Подписать документ' }).waitFor();
+    await tool.evaluate(() => Promise.all(document.getAnimations().map(animation => animation.finished.catch(() => {}))));
+    await tool.screenshot({ path: resolve(`artifacts/design-sign-${width}.png`), fullPage: true });
+  }
+  await tool.emulateMedia({ reducedMotion: 'reduce' });
+  await tool.locator('#nav-verify').click();
+  assert.equal(await tool.evaluate(() => document.getAnimations().filter(animation => animation.playState === 'running').length), 0);
+  await tool.emulateMedia({ reducedMotion: 'no-preference' });
+  console.log('PASS: stable signing/verification layout at 1280/870/400, upper-left Back and reduced-motion preference');
   const toolId = await tool.evaluate(() => new Promise(resolve => chrome.tabs.getCurrent(tab => resolve(tab.id))));
   await popupPage.locator('#verify').click();
   await tool.waitForURL(`chrome-extension://${extensionId}/signing/approve.html?mode=verify`);
