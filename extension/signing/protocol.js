@@ -7,7 +7,7 @@ function signerConstraints(value = {}) {
   if (value.extKeyUsageOids !== undefined && (!Array.isArray(value.extKeyUsageOids) || value.extKeyUsageOids.length > 24 || value.extKeyUsageOids.some(id => typeof id !== 'string' || !/^\d+(\.\d+)+$/.test(id)))) unsupported('Некорректное назначение сертификата.');
   for (const field of ['iin', 'bin']) if (value[field] !== undefined && (typeof value[field] !== 'string' || !/^\d{12}$/.test(value[field]))) unsupported('Некорректный ИИН или БИН.');
   if (value.serialNumber !== undefined && (typeof value.serialNumber !== 'string' || !/^[0-9a-f]{1,128}$/i.test(value.serialNumber))) unsupported('Некорректный серийный номер.');
-  if (value.chain !== undefined && (!Array.isArray(value.chain) || value.chain.length > 8 || value.chain.some(cert => typeof cert !== 'string' || cert.length > 16384 || !cert.includes('-----BEGIN CERTIFICATE-----')))) unsupported('Некорректная цепочка сертификатов.');
+  if (value.chain !== undefined && (!Array.isArray(value.chain) || value.chain.length > 24 || value.chain.some(cert => typeof cert !== 'string' || cert.length > 16384 || !cert.includes('-----BEGIN CERTIFICATE-----')))) unsupported('Некорректная цепочка сертификатов.');
   return structuredClone(value);
 }
 
@@ -38,8 +38,9 @@ export function normalizeRequest(input) {
     if (args.allowedStorages != null && (!Array.isArray(args.allowedStorages) || !args.allowedStorages.includes('PKCS12'))) unsupported('Сайт не разрешает файловые ключи PKCS#12.');
     const params = args.signingParams || {};
     if (typeof params !== 'object' || Array.isArray(params)) unsupported('Некорректные параметры подписи.');
-    if (params.tsaProfile !== undefined && (!params.tsaProfile || typeof params.tsaProfile !== 'object' || Array.isArray(params.tsaProfile) || Object.keys(params.tsaProfile).length)) unsupported('Поддерживается стандартный профиль метки времени НУЦ: tsaProfile={}.');
-    if (params.tsaProfile !== undefined && args.format !== 'cms') unsupported('Метка времени поддерживается для CMS/CAdES.');
+    const timestamp = params.tsaProfile != null;
+    if (timestamp && (typeof params.tsaProfile !== 'object' || Array.isArray(params.tsaProfile) || Object.keys(params.tsaProfile).length)) unsupported('Поддерживается стандартный профиль метки времени НУЦ: tsaProfile={}.');
+    if (timestamp && args.format !== 'cms') unsupported('Метка времени поддерживается для CMS/CAdES.');
     for (const field of ['decode', 'encapsulate', 'digested']) if (params[field] !== undefined && typeof params[field] !== 'boolean') unsupported('Параметры подписи должны быть логическими значениями.');
     if (params.digested && args.format === 'xml') unsupported('XML нельзя подписать по готовому хешу.');
     if (params.digested && params.encapsulate !== false && args.format === 'cms') unsupported('Для готового хеша нужна отдельная подпись: encapsulate=false.');
@@ -49,7 +50,7 @@ export function normalizeRequest(input) {
     const signerParams = signerConstraints(args.signerParams);
     const documents = Array.isArray(args.data) ? args.data : [args.data];
     if (!documents.length || documents.length > 10 || documents.some(value => typeof value !== 'string' || !value)) unsupported('Некорректные данные подписания.');
-    return { operation: 'sign', format: args.format, documents, decode: Boolean(params.decode), digested: Boolean(params.digested), encapsulate: params.encapsulate !== false, timestamp: params.tsaProfile !== undefined,
+    return { operation: 'sign', format: args.format, documents, decode: Boolean(params.decode), digested: Boolean(params.digested), encapsulate: params.encapsulate !== false, timestamp,
       signerParams, trustRequired: signerParams.chain === undefined || signerParams.chain.length > 0, basics: true };
   }
   unsupported();

@@ -81,7 +81,11 @@ export function certificateInfo(raw) {
     if (critical && !['2.5.29.15', '2.5.29.19', '2.5.29.37'].includes(id)) unknownCritical.push(id);
   }
   const algorithm = keyOid === O.rsa ? { label: 'RSA · SHA-256', hash: O.sha256, signature: O.rsa } : schemes[keyOid];
-  if (!algorithm) throw new Error(`Алгоритм ключа ${keyOid} пока не поддерживается.`);
+  if (!algorithm) {
+    const error = new Error(`Алгоритм ключа ${keyOid} пока не поддерживается.`);
+    error.code = 'UNSUPPORTED_CERTIFICATE_ALGORITHM';
+    throw error;
+  }
   if (keyOid !== O.rsa) {
     const params = spki.value[0].value[1];
     if (!params || params.type !== A.Type.SEQUENCE || oidValue(params.value[0]) !== algorithm.curveOid) throw new Error('Параметры ГОСТ не поддерживаются.');

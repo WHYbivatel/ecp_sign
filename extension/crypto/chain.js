@@ -8,8 +8,14 @@ const fingerprint = async cert => hex(await crypto.subtle.digest('SHA-256', byte
 
 export async function verifyChain(leaf, additional = [], { anchors, now = Date.now(), includeBundled = true } = {}) {
   const bundled = includeBundled ? trustStore.map(entry => ({ ...entry, info: certificateInfo(unbase64(entry.certificate)) })) : [];
-  const trusted = anchors === undefined ? bundled.filter(entry => entry.anchor).map(entry => entry.info) : anchors.map(certificateInfo);
-  const candidates = [...additional, ...bundled.map(entry => entry.info), ...trusted].map(cert => cert.certificate ? cert : certificateInfo(cert));
+  // An allow-list may include obsolete algorithms alongside supported roots.
+  // Skipping an unusable anchor narrows this allow-list; it never adds trust.
+  const supportedAnchor = raw => {
+    try { return certificateInfo(raw); }
+    catch (error) { if (error.code === 'UNSUPPORTED_CERTIFICATE_ALGORITHM') return null; throw error; }
+  };
+  const trusted = anchors === undefined ? bundled.filter(entry => entry.anchor).map(entry => entry.info) : anchors.map(supportedAnchor).filter(Boolean);
+  const candidates = [...additional, ...bundled.map(entry => entry.info), ...trusted].map(cert => cert.certificate ? cert : supportedAnchor(cert)).filter(Boolean);
   const anchorHashes = new Set(await Promise.all(trusted.map(fingerprint)));
   let failure = 'Цепочка до доверенного корня не найдена.';
   const valid = info => {

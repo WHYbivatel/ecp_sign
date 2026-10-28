@@ -6,6 +6,7 @@ import { resolve, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { rsaFixture, gostFixture, PASSWORD } from './helpers/fixtures.js';
+import { forge, oid, der } from '../extension/crypto/encoding.js';
 
 const folder = mkdtempSync(join(tmpdir(), 'ncabrowser-e2e-'));
 const extension = resolve('dist/chromium');
@@ -104,6 +105,51 @@ try {
   assert.equal(answer.status, true);
   assert.match(answer.body.result[0], /ds:SignatureValue/);
   console.log('PASS: basics.sign XML returned through the page bridge');
+
+  // Reproduce the public NUC login request: send immediately on open,
+  // null TSA profile, twelve acceptable certificates including a legacy OID.
+  const authentication = rsaFixture({ purpose: 'clientAuth' });
+  const signingOnly = rsaFixture({ purpose: 'emailProtection' });
+  const oldRoot = forge.pki.certificateToAsn1(forge.pki.certificateFromPem(authentication.certificate));
+  oldRoot.value[0].value[6].value[0].value[0] = oid('1.3.6.1.4.1.6801.1.5.8');
+  const legacyPem = forge.pem.encode({ type: 'CERTIFICATE', body: der(oldRoot) });
+  const nucRequest = { module: basics.module, method: 'sign', args: { allowedStorages: ['PKCS12', 'JKS'], format: 'xml', data: '<login><client-type>PORTAL</client-type></login>', signingParams: { decode: false, encapsulate: false, digested: false, tsaProfile: null }, signerParams: { extKeyUsageOids: ['1.3.6.1.5.5.7.3.2'], chain: [...Array(11).fill(authentication.certificate), legacyPem] } } };
+  async function portalOnOpen(request) {
+    const opened = context.waitForEvent('page');
+    await page.evaluate(request => {
+      window.portalMessages = [];
+      window.portalSocket = new WebSocket('wss://127.0.0.1:13579/');
+      window.portalResult = new Promise(resolve => {
+        window.portalSocket.onopen = () => window.portalSocket.send(JSON.stringify(request));
+        window.portalSocket.onmessage = event => { const response = JSON.parse(event.data); window.portalMessages.push(response); resolve(response); };
+      });
+    }, request);
+    const approval = await opened; await approval.waitForLoadState();
+    assert.equal(await page.evaluate(() => window.portalMessages.length), 0, 'No unsolicited greeting may resolve an immediate-request client');
+    return approval;
+  }
+  popup = await portalOnOpen(nucRequest);
+  await popup.locator('#key-file').setInputFiles({ name: 'auth-test.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(authentication.container) });
+  await popup.locator('#password').fill(PASSWORD); await popup.locator('#unlock').click();
+  await popup.locator('#certificate:not([hidden])').waitFor();
+  await popup.locator('#approve').click();
+  const portalAnswer = await page.evaluate(() => window.portalResult);
+  assert.equal(portalAnswer.status, true); assert.match(portalAnswer.body.result[0], /ds:SignatureValue/);
+  await page.evaluate(() => window.portalSocket.close());
+  console.log('PASS: NUC-style null TSA + twelve roots + legacy root + authentication EKU, direct onopen client receives signed XML');
+  popup = await portalOnOpen(nucRequest);
+  await popup.locator('#key-file').setInputFiles({ name: 'signing-only-test.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(signingOnly.container) });
+  await popup.locator('#password').fill(PASSWORD); await popup.locator('#unlock').click();
+  await popup.locator('#status[data-error]').filter({ hasText: 'AUTH_RSA' }).waitFor();
+  assert.equal(await popup.locator('#approve').isDisabled(), true);
+  assert.equal(await page.evaluate(() => window.portalMessages.length), 0);
+  await popup.locator('#cancel').click();
+  const cancelledPortal = await page.evaluate(() => window.portalResult);
+  assert.deepEqual(cancelledPortal, { status: true, body: {} });
+  await page.evaluate(() => window.portalSocket.close());
+  authentication.container.fill(0); signingOnly.container.fill(0);
+  console.log('PASS: a document-signing-only certificate cannot authenticate; clear explanation and no signed response');
+
 
   popup = await confirmation(common, gost);
   await popup.locator('#approve').click();

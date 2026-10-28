@@ -26,3 +26,12 @@ test('response formats preserve the two protocol families and cancellation', () 
   assert.equal(errorResponse({ module: common }, 'cancel', true).code, '500');
   assert.deepEqual(errorResponse({ module: basics }, 'cancel', true), { status: true, body: {} });
 });
+
+test('NUC XML request permits null TSA profile and twelve trust certificates without weakening limits', () => {
+  const pem = '-----BEGIN CERTIFICATE-----\npublic-test-only\n-----END CERTIFICATE-----';
+  const request = { module: basics, method: 'sign', args: { allowedStorages: ['PKCS12', 'JKS'], format: 'xml', data: '<login/>', signingParams: { decode: false, encapsulate: false, digested: false, tsaProfile: null }, signerParams: { extKeyUsageOids: ['1.3.6.1.5.5.7.3.2'], chain: Array(12).fill(pem) } } };
+  const normalized = normalizeRequest(request);
+  assert.equal(normalized.timestamp, false); assert.equal(normalized.trustRequired, true); assert.equal(normalized.signerParams.chain.length, 12);
+  assert.throws(() => normalizeRequest({ ...request, args: { ...request.args, signerParams: { chain: Array(25).fill(pem) } } }), /цепочка/);
+  assert.throws(() => normalizeRequest({ ...request, args: { ...request.args, signingParams: { tsaProfile: {} } } }), /Метка времени/);
+});

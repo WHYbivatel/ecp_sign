@@ -1,3 +1,4 @@
+import { checkSignerConstraints } from './constraints.js';
 import { openContainer } from './signer.js';
 import { signCms } from './cms.js';
 import { signXml } from './xml.js';
@@ -11,15 +12,7 @@ import { A, oidValue } from './encoding.js';
 let signer;
 let busy = false;
 let trust;
-function checkConstraints(request) {
-  const constraints = request.signerParams || {};
-  for (const field of ['iin', 'bin', 'serialNumber']) {
-    const normalize = value => field === 'serialNumber' ? String(value || '').toLowerCase().replace(/^0+/, '') : value;
-    if (constraints[field] && normalize(constraints[field]) !== normalize(signer.info.summary[field])) throw new Error('Сертификат не соответствует требованиям сайта.');
-  }
-  if ((constraints.extKeyUsageOids || []).some(oid => !signer.info.eku.includes(oid))) throw new Error('Назначение сертификата не соответствует требованиям сайта.');
-  if (request.trustRequired && !trust?.trusted) throw new Error('Сайт требует доверенную цепочку сертификата. ' + (trust?.reason || 'Цепочка не проверена.'));
-}
+function checkConstraints(request) { checkSignerConstraints(signer.info, request, trust); }
 self.onmessage = async ({ data }) => {
   if (busy) return;
   busy = true;

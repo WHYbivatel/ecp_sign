@@ -8,11 +8,12 @@ import GostSign from '../../extension/vendor/gost/sign.cjs';
 import GostDigest from '../../extension/vendor/gost/digest.cjs';
 
 export const PASSWORD = 'public-test-password';
-export function rsaFixture() {
+export function rsaFixture({ purpose } = {}) {
+  if (purpose && !['clientAuth', 'emailProtection'].includes(purpose)) throw new Error('Unsupported fixture purpose');
   const folder = mkdtempSync(join(tmpdir(), 'ncabrowser-rsa-'));
   try {
     execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(folder, 'key.pem'),
-      '-out', join(folder, 'cert.pem'), '-days', '2', '-subj', '/CN=Tegin disposable test'], { stdio: 'ignore' });
+      '-out', join(folder, 'cert.pem'), '-days', '2', '-subj', '/CN=Tegin disposable test', ...(purpose ? ['-addext', 'extendedKeyUsage=' + purpose] : [])], { stdio: 'ignore' });
     execFileSync('openssl', ['pkcs12', '-export', '-inkey', join(folder, 'key.pem'), '-in', join(folder, 'cert.pem'),
       '-out', join(folder, 'key.p12'), '-passout', `pass:${PASSWORD}`], { stdio: 'ignore' });
     return { container: new Uint8Array(readFileSync(join(folder, 'key.p12'))),

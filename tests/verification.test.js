@@ -84,6 +84,11 @@ test('certificate paths reject forged signatures, critical unknown extensions an
   leaf.setExtensions([{ name: 'basicConstraints', cA: false, critical: true }, { name: 'keyUsage', digitalSignature: true, critical: true }]);
   leaf.sign(key, forge.md.sha256.create());
   const raw = bytes(der(forge.pki.certificateToAsn1(leaf)));
+  const obsoleteRoot = forge.pki.certificateToAsn1(root);
+  obsoleteRoot.value[0].value[6].value[0].value[0] = oid('1.3.6.1.4.1.6801.1.5.8');
+  const obsoleteRaw = bytes(der(obsoleteRoot));
+  assert.equal((await verifyChain(certificateInfo(raw), [], { anchors: [obsoleteRaw, anchor] })).trusted, true);
+  assert.equal((await verifyChain(certificateInfo(raw), [], { anchors: [obsoleteRaw] })).trusted, false);
   assert.equal((await verifyChain(certificateInfo(raw), [], { anchors: [anchor] })).trusted, true);
   assert.equal((await verifyChain(certificateInfo(raw))).trusted, false);
   const tampered = raw.slice(); tampered[tampered.length - 1] ^= 1;

@@ -15,11 +15,11 @@
       this.url = new URL(url, location.href).href;
       this.readyState = 0; this.bufferedAmount = 0; this.extensions = ''; this.protocol = ''; this.binaryType = 'blob';
       this.onopen = null; this.onmessage = null; this.onerror = null; this.onclose = null;
-      this.pending = null;
+      this.pending = null; this.hasSentRequest = false;
       setTimeout(() => {
         if (this.readyState !== 0) return;
         this.readyState = 1; this.emit('open', new Event('open'));
-        setTimeout(() => { if (this.readyState === 1) this.message({ result: { version: '1.4', implementation: 'Tegin' } }); }, 0);
+        setTimeout(() => { if (this.readyState === 1 && !this.hasSentRequest) this.message({ result: { version: '1.4', implementation: 'Tegin' } }); }, 0);
       }, 0);
     }
     emit(type, event) { this.dispatchEvent(event); if (typeof this[`on${type}`] === 'function') this[`on${type}`](event); }
@@ -32,6 +32,7 @@
       let request;
       try { request = JSON.parse(data); } catch { this.message({ code: '400', status: false, message: 'Некорректный JSON.' }); return; }
       if (this.pending) { this.close(1008, 'Only one pending request per socket'); return; }
+      this.hasSentRequest = true;
       const id = crypto.randomUUID(); this.pending = id; sockets.set(id, this);
       window.postMessage({ channel: 'ncabrowser:request', id, request }, location.origin);
     }
