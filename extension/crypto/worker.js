@@ -18,7 +18,7 @@ self.onmessage = async ({ data }) => {
   busy = true;
   try {
     if (data.kind === 'open') {
-      signer?.destroy();
+      signer?.destroy(); signer = null; trust = undefined;
       try { signer = await openContainer(new Uint8Array(data.container), data.password); }
       finally { new Uint8Array(data.container).fill(0); data.password = ''; }
       const request = data.request || {};
@@ -75,7 +75,8 @@ self.onmessage = async ({ data }) => {
       self.close();
     }
   } catch (error) {
-    self.postMessage({ kind: 'error', message: error.message || 'Операция не выполнена.' });
+    const certificate = data.kind === 'open' ? (signer ? { ...signer.info.summary, trust } : error.certificate) : undefined;
+    self.postMessage({ kind: 'error', message: error.message || 'Операция не выполнена.', certificate });
     signer?.destroy(); signer = null;
   } finally { busy = false; }
 };

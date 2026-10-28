@@ -63,7 +63,13 @@ test('Streebog matches an independently calculated known answer', () => {
 test('wrong passwords, expired certificates, hostile XML and co-signing fail explicitly', async () => {
   const fixture = rsaFixture();
   await assert.rejects(openContainer(fixture.container, 'wrong'), /пароль/);
-  await assert.rejects(openContainer(fixture.container, PASSWORD, { now: 0 }), /Срок/);
+  await assert.rejects(openContainer(fixture.container, PASSWORD, { now: 0 }), error => {
+    assert.match(error.message, /Срок/);
+    assert.ok(error.certificate.notBefore); assert.ok(error.certificate.notAfter);
+    assert.ok(Array.isArray(error.certificate.extendedKeyUsageOids));
+    assert.equal(error.certificate.key, undefined);
+    return true;
+  });
   const signer = await openContainer(fixture.container, PASSWORD);
   await assert.rejects(signXml(signer, '<!DOCTYPE x [<!ENTITY x SYSTEM "file:///etc/passwd">]><x>&x;</x>'), /DTD/);
   await assert.rejects(signXml(signer, '<x><broken></x>'), /XML/);

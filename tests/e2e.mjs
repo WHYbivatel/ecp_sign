@@ -129,7 +129,7 @@ try {
     return approval;
   }
   popup = await portalOnOpen(nucRequest);
-  await popup.locator('#key-file').setInputFiles({ name: 'auth-test.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(authentication.container) });
+  await popup.locator('#key-file').setInputFiles({ name: 'переименованный-ключ.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(authentication.container) });
   await popup.locator('#password').fill(PASSWORD); await popup.locator('#unlock').click();
   await popup.locator('#certificate:not([hidden])').waitFor();
   await popup.locator('#approve').click();
@@ -141,6 +141,13 @@ try {
   await popup.locator('#key-file').setInputFiles({ name: 'signing-only-test.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(signingOnly.container) });
   await popup.locator('#password').fill(PASSWORD); await popup.locator('#unlock').click();
   await popup.locator('#status[data-error]').filter({ hasText: 'AUTH_RSA' }).waitFor();
+  assert.equal(await popup.locator('#approve').isDisabled(), true);
+  assert.equal(await popup.locator('#certificate[data-diagnostic]').isVisible(), true);
+  assert.match(await popup.locator('#cert-usage').innerText(), /1\.3\.6\.1\.5\.5\.7\.3\.4/);
+  assert.doesNotMatch(await popup.locator('#cert-usage').innerText(), /1\.3\.6\.1\.5\.5\.7\.3\.2/);
+  await popup.locator('#change-key').click();
+  assert.equal(await popup.locator('#key-form').isVisible(), true);
+  assert.equal(await popup.locator('#certificate').isHidden(), true);
   assert.equal(await popup.locator('#approve').isDisabled(), true);
   assert.equal(await page.evaluate(() => window.portalMessages.length), 0);
   await popup.locator('#cancel').click();

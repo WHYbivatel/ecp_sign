@@ -162,19 +162,25 @@ $('#key-file').addEventListener('change', () => {
   report(file ? 'Ключ выбран. Введите пароль.' : ''); updateControls();
 });
 
-function showCertificate(certificate) {
-  selectedCertificate = certificate;
+function showCertificate(certificate, readOnly = false) {
+  selectedCertificate = readOnly ? null : certificate;
+  $('#certificate').toggleAttribute('data-diagnostic', readOnly);
+  $('#certificate-heading').textContent = readOnly ? 'Сведения о сертификате' : 'Ключ открыт';
+  $('#change-key').textContent = readOnly ? 'Выбрать другой' : 'Сменить';
   $('#key-form').hidden = true; $('#certificate').hidden = false;
   $('#holder').textContent = certificate.name || 'Сертификат ЭЦП';
-  $('#cert-details').textContent = `${certificate.algorithm}\nДействует до ${new Date(certificate.notAfter).toLocaleDateString('ru-RU')}${certificate.organization ? '\n' + certificate.organization : ''}`;
+  $('#cert-details').textContent = `${certificate.algorithm}\nДействует с ${new Date(certificate.notBefore).toLocaleDateString('ru-RU')} до ${new Date(certificate.notAfter).toLocaleDateString('ru-RU')}${certificate.organization ? '\n' + certificate.organization : ''}`;
+  const purposes = { '1.3.6.1.5.5.7.3.2': 'Аутентификация клиента (вход на сайт)', '1.3.6.1.5.5.7.3.4': 'Защита электронной почты' };
+  $('#cert-usage').textContent = certificate.extendedKeyUsageOids?.length ? certificate.extendedKeyUsageOids.map(oid => `${purposes[oid] || 'Назначение'} · ${oid}`).join('\n') : 'Расширение EKU отсутствует.';
   const trusted = certificate.trust?.trusted;
   $('#trust-state').toggleAttribute('data-trusted', Boolean(trusted));
   $('#trust-state').textContent = trusted ? (certificate.trust.scope === 'site' ? 'Цепочка УЦ, указанного сайтом, проверена' : 'Цепочка НУЦ РК подтверждена') : 'Цепочка доверия не подтверждена';
   $('#trust-note').textContent = trusted ? 'Подпись ключа и срок действия проверены локально.' : 'Ключ соответствует сертификату, но его УЦ не распознан. Подтверждайте операцию, только если доверяете этому сертификату.';
+  if (readOnly) $('#trust-note').textContent = 'Это сведения для выяснения причины отказа. Ключ закрыт, подписание недоступно.';
   $('#cert-identifier').textContent = [certificate.iin, certificate.bin].filter(Boolean).join(' / ') || 'Не указан';
   $('#cert-serial').textContent = certificate.serialNumber;
   $('#cert-fingerprint').textContent = certificate.fingerprint || '—';
-  $('#step').textContent = '02 / 02'; updateControls();
+  $('#step').textContent = readOnly ? '01 / 02' : '02 / 02'; updateControls();
 }
 function startWorker(current, handler) {
   worker = new Worker(api.runtime.getURL('crypto/worker.js'));
@@ -182,7 +188,7 @@ function startWorker(current, handler) {
   worker.onmessage = async ({ data }) => {
     if (current !== generation || finished) return;
     try {
-      if (data.kind === 'error') { lock(); report(data.message, true); return; }
+      if (data.kind === 'error') { lock(); if (data.certificate) showCertificate(data.certificate, true); report(data.message, true); return; }
       await handler(data);
     } catch (error) { lock(); report(error.message, true); }
   };

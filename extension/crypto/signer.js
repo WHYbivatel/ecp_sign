@@ -98,7 +98,7 @@ export function certificateInfo(raw) {
       bin: /^BIN(\d{12})$/.exec(nameValue(subject, '2.5.4.11'))?.[1] || '',
       subjectDn: distinguishedName(subject), issuerDn: distinguishedName(tbs[offset + 2]),
       notBefore: dateValue(validity[0]).toISOString(), notAfter: dateValue(validity[1]).toISOString(),
-      serialNumber: forge.util.bytesToHex(serial.value), algorithm: algorithm.label,
+      serialNumber: forge.util.bytesToHex(serial.value), algorithm: algorithm.label, extendedKeyUsageOids: [...eku],
       certificate: forge.util.encode64(der(certificate))
     }
   };
@@ -179,7 +179,9 @@ export async function openContainer(container, password, { now = Date.now() } = 
       } else continue;
       if (now < Date.parse(info.summary.notBefore) || now > Date.parse(info.summary.notAfter)) {
         if (key instanceof Uint8Array) key.fill(0);
-        throw new Error('Срок действия сертификата ещё не наступил или уже истёк.');
+        const error = new Error('Срок действия сертификата ещё не наступил или уже истёк.');
+        error.certificate = { ...info.summary };
+        throw error;
       }
       if (info.keyUsage !== null && !(info.keyUsage & 192)) throw new Error('Сертификат не разрешает цифровую подпись.');
       // The browser worker owns all decrypted data and is terminated after each operation.
