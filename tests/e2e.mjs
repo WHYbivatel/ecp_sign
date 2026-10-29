@@ -6,6 +6,7 @@ import { resolve, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { rsaFixture, gostFixture, PASSWORD } from './helpers/fixtures.js';
+import { verifyCms } from '../extension/crypto/cms-verify.js';
 import { forge, oid, der } from '../extension/crypto/encoding.js';
 
 const folder = mkdtempSync(join(tmpdir(), 'ncabrowser-e2e-'));
@@ -338,6 +339,80 @@ try {
   assert.equal(answer.status, false);
   assert.match(answer.message, /Метка времени/);
   console.log('PASS: XML timestamp request fails explicitly (CMS timestamp supported)');
+
+  const moduleKey = rsaFixture({ purpose: 'emailProtection' });
+  for (const request of [
+    { module: 'NURSign', type: 'xml', data: '<request>Госзакупки</request>' },
+    { module: 'NURSign', type: 'multixml', data: ['<a/>','<b/>'] },
+    { module: 'kz.sapa.eproc.osgi.EprocModule', method: 'signXml', uid: 'correlated-request', storageName: 'PKCS12', keyType: 'SIGN', xml: '<samruk/>' },
+    { module: 'kz.qiwi.osgi.SecurityUtils', method: 'signXml', args: ['qiwi-call','<qiwi/>'] },
+    { module: 'kz.rating1c.edo.signUtils', method: 'signXml', args: ['PKCS12','SIGNATURE','<rating/>','',''], uuid: 'rating-correlation' },
+    { module: 'kz.uchet.signUtil.commonUtils', method: 'signXml', args: ['PKCS12','SIGNATURE','<uchet/>','',''] }
+  ]) {
+    popup = await confirmation(request, moduleKey);
+    await popup.locator('#approve').click(); answer = await result();
+    if (request.module === 'NURSign') { assert.equal(answer.errorCode, 'NONE'); assert.ok((Array.isArray(answer.result) ? answer.result : [answer.result]).every(xml => xml.includes('ds:SignatureValue'))); }
+    else { assert.equal(answer.code, '200'); if (request.uid) assert.equal(answer.uid, request.uid); if (request.uuid) assert.equal(answer.uuid, request.uuid);
+      if (request.module === 'kz.qiwi.osgi.SecurityUtils') { assert.equal(answer.responseObject.verificationResult, true); assert.equal(answer.responseObject.callID, 'qiwi-call'); } }
+  }
+  const binaryRequest = { module: 'NURSign', type: 'binary', data: data.toString('base64') };
+  popup = await confirmation(binaryRequest, moduleKey); await popup.locator('#approve').click(); answer = await result();
+  assert.equal(answer.errorCode, 'NONE');
+  const verifiedModuleCms = await verifyCms(new Uint8Array(Buffer.from(answer.result, 'base64')), { detached: new Uint8Array(data) });
+  assert.equal(verifiedModuleCms.valid, true); assert.equal(verifiedModuleCms.signers[0].cades, true); assert.equal(verifiedModuleCms.attached, false);
+  if (liveTsp) {
+    popup = await confirmation({ module: 'NURSign', type: 'text', data: data.toString('utf8') }, moduleKey);
+    await popup.locator('#approve').click(); answer = await result(); assert.equal(answer.errorCode, 'NONE');
+    const stamped = await verifyCms(new Uint8Array(Buffer.from(answer.result, 'base64')), { detached: new Uint8Array(data) });
+    assert.equal(stamped.valid, true);
+    assert.ok(stamped.signers[0].info.value.some(node => node.tagClass === 128 && node.type === 1));
+    console.log('PASS: NURSign text keeps its mandatory NUC timestamp; CAdES signature verifies');
+  }
+  console.log('PASS: inspected Goszakup/Samruk/QIWI/Rating/Uchet protocols sign through isolated workers; NURSign detached CAdES verifies');
+
+  const manager = await context.newPage();
+  await manager.goto(`chrome-extension://${extensionId}/index.html?workspace=1`); await manager.locator('#modules').click();
+  await manager.locator('[data-module="goszakup"]').waitFor();
+  assert.equal(await manager.locator('[data-module]').count(), 8);
+  await manager.locator('#filter').selectOption('all'); assert.equal(await manager.locator('.module').count(), 47);
+  await manager.locator('#search').fill('ЭСФ'); assert.ok(await manager.locator('[data-unavailable]').count() >= 1);
+  await manager.locator('#search').fill(''); await manager.locator('#filter').selectOption('available');
+  const moduleCard = manager.locator('[data-module="goszakup"]');
+  await moduleCard.getByLabel('Включить Госзакупки · NURSign').uncheck();
+  await manager.locator('#status').filter({ hasText: 'сохранены' }).waitFor();
+  await send(binaryRequest); answer = await result(); assert.equal(answer.errorCode, '400'); assert.match(answer.errorMessage, /выключен/);
+  await moduleCard.getByLabel('Включить Госзакупки · NURSign').check();
+  await manager.locator('#status').filter({ hasText: 'сохранены' }).waitFor();
+  // Wait for the actual saved flag; the status text may repeat across updates.
+  await manager.waitForFunction(async () => (await chrome.storage.local.get('moduleSettings')).moduleSettings.goszakup.enabled);
+  popup = await confirmation(binaryRequest, moduleKey);
+  await moduleCard.getByLabel('Включить Госзакупки · NURSign').uncheck();
+  await manager.waitForFunction(async () => !(await chrome.storage.local.get('moduleSettings')).moduleSettings.goszakup.enabled);
+  await popup.locator('#approve').click(); await popup.locator('#status[data-error]').filter({ hasText: 'выключен' }).waitFor();
+  assert.equal(await popup.locator('#approve').isDisabled(), true);
+  await popup.locator('#cancel').click(); answer = await result(); assert.equal(answer.errorCode, '500');
+  await moduleCard.getByLabel('Включить Госзакупки · NURSign').check();
+  await manager.waitForFunction(async () => (await chrome.storage.local.get('moduleSettings')).moduleSettings.goszakup.enabled);
+  await moduleCard.locator('summary').click();
+  await moduleCard.locator('textarea').fill(`http://127.0.0.1:${port}`);
+  await moduleCard.locator('select').selectOption('deny'); await moduleCard.locator('input[type="number"]').fill('1');
+  await moduleCard.getByRole('button', { name: 'Сохранить настройки' }).click();
+  await manager.waitForFunction(async () => (await chrome.storage.local.get('moduleSettings')).moduleSettings.goszakup.timestamp === 'deny');
+  await send({ module: 'NURSign', type: 'text', data: 'test' }); answer = await result(); assert.match(answer.errorMessage, /обязательную метку/);
+  await send({ module: 'NURSign', type: 'multixml', data: ['<a/>','<b/>'] }); answer = await result(); assert.match(answer.errorMessage, /Число/);
+  await manager.reload(); await manager.locator('[data-module="goszakup"]').waitFor();
+  await manager.locator('[data-module="goszakup"] summary').click();
+  assert.equal(await manager.locator('[data-module="goszakup"] select').inputValue(), 'deny');
+  await manager.setViewportSize({ width: 400, height: 850 });
+  assert.ok(await manager.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Module manager must fit mobile width');
+  await manager.setViewportSize({ width: 1100, height: 900 });
+  mkdirSync(resolve('artifacts'), { recursive: true }); await manager.screenshot({ path: resolve('artifacts/modules.png'), fullPage: true });
+  await manager.getByRole('link', { name: '← На главную' }).click(); await manager.locator('#modules').waitFor();
+  await manager.close();
+  const preferences = await sw.evaluate(async () => (await chrome.storage.local.get('moduleSettings')).moduleSettings);
+  assert.deepEqual(Object.keys(preferences), ['goszakup']); assert.ok(!JSON.stringify(preferences).includes(PASSWORD));
+  await sw.evaluate(() => chrome.storage.local.clear()); moduleKey.container.fill(0);
+  console.log('PASS: module manager catalog/search/mobile layout, persistent preferences, disabling and revoking pending signing, required timestamp and batch limits');
 
   const previousMessages = await page.evaluate(() => window.bridgeMessages.join(''));
   popup = await confirmation(common);

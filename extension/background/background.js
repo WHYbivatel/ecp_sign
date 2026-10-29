@@ -1,3 +1,5 @@
+import { findModule, enforceSettings } from '../modules/registry.js';
+import { assembleResult } from '../modules/adapters.js';
 import { normalizeRequest, successResponse, errorResponse } from '../signing/protocol.js';
 
 const PREFIX = 'pending:';
@@ -8,7 +10,8 @@ const uiUrl = api.runtime.getURL('signing/approve.html');
 // Local tools live in one normal browser tab; portal approval stays isolated.
 api.action.onClicked.addListener(async tab => {
   const home = api.runtime.getURL('index.html');
-  const tabs = await api.tabs.query({ url: [home + '*', uiUrl + '*'] });
+  const modulesPage = api.runtime.getURL('modules/index.html');
+  const tabs = await api.tabs.query({ url: [home + '*', uiUrl + '*', modulesPage + '*'] });
   const existing = tabs.find(item => item.url && !new URL(item.url).hash);
   if (existing) {
     await api.tabs.update(existing.id, { active: true });
@@ -50,7 +53,11 @@ async function handle(message, sender) {
     if (!sender.tab || !sender.url || !Number.isInteger(sender.frameId) || !/^[a-z0-9-]{1,80}$/i.test(message.instance || '') || !/^[a-z0-9-]{1,80}$/i.test(message.token || '')) throw new Error('Некорректный источник запроса.');
     const origin = new URL(sender.url).origin;
     if (!origin.startsWith('https://') && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) throw new Error('Поддерживаются HTTPS-сайты.');
-    const normalized = normalizeRequest(message.request);
+    let normalized;
+    try { normalized = normalizeRequest(message.request); } catch (error) { return { response: errorResponse(message.request, error.message) }; }
+    const module = findModule(message.request.module);
+    try { if (module) enforceSettings(module, normalized, origin, (await api.storage.local.get('moduleSettings')).moduleSettings?.[module.id]); }
+    catch (error) { return { response: errorResponse(message.request, error.message) }; }
     if (normalized.immediate) return { response: successResponse(message.request, normalized.value) };
     const records = Object.entries(await api.storage.session.get(null)).filter(([key]) => key.startsWith(PREFIX));
     for (const [, record] of records) if (Date.now() > record.expires) await finish(record, errorResponse(record.request, 'Время подтверждения истекло.', true));
@@ -90,11 +97,11 @@ async function handle(message, sender) {
     await finish(record, errorResponse(record.request, 'Страница закрыта, изменена или время запроса истекло.', true));
     throw new Error('Исходная страница больше не доступна.');
   }
+  const module = findModule(record.request.module);
+  if (module) enforceSettings(module, record.normalized, record.origin, (await api.storage.local.get('moduleSettings')).moduleSettings?.[module.id]);
   if (message.kind === 'nca:get' || message.kind === 'nca:validate') return { record };
   if (message.kind === 'nca:complete') {
-    let result = message.result;
-    if (record.normalized.basics) result = { result: Array.isArray(result) ? result : [result] };
-    else if (Array.isArray(result) && !record.normalized.multiple) result = result[0];
+    const result = assembleResult(record.normalized, message.result);
     await finish(record, successResponse(record.request, result));
     return { ok: true };
   }

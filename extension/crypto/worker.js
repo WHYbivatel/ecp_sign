@@ -1,7 +1,7 @@
 import { checkSignerConstraints, isUnifiedNcaCertificate } from './constraints.js';
 import { openContainer } from './signer.js';
 import { signCms } from './cms.js';
-import { signXml } from './xml.js';
+import { signXml, verifyCreatedXml } from './xml.js';
 import { base64, unbase64, utf8 } from './encoding.js';
 import { verifyChain } from './chain.js';
 import { forge, bytes as binaryBytes } from './encoding.js';
@@ -66,7 +66,11 @@ self.onmessage = async ({ data }) => {
       for (const doc of request.documents) {
         const bytes = request.decode ? unbase64(doc) : utf8(doc);
         try {
-          if (request.format === 'xml') results.push(await signXml(signer, new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
+          if (request.format === 'xml') {
+            const signedXml = await signXml(signer, new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+            if (request.moduleId === 'qiwi' && !await verifyCreatedXml(signer, signedXml)) throw new Error('Не удалось проверить созданную XML-подпись.');
+            results.push(signedXml);
+          }
           else if (request.format === 'raw') results.push(base64(request.digested ? await signer.signDigest(bytes) : await signer.sign(bytes)));
           else results.push(base64(await signCms(signer, bytes, { encapsulate: request.encapsulate, cades: request.cades, digested: request.digested,
             timestamp: request.timestamp, onTimestamp: stamp => timestamps.push(stamp) })));

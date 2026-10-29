@@ -1,3 +1,4 @@
+import { adaptRequest, adapterResponse } from '../modules/adapters.js';
 const COMMON = 'kz.gov.pki.knca.commonUtils';
 const BASICS = 'kz.gov.pki.knca.basics';
 export const MAX_MESSAGE_LENGTH = 3 * 1024 * 1024;
@@ -14,6 +15,12 @@ function signerConstraints(value = {}) {
 export function normalizeRequest(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) unsupported('Некорректный запрос.');
   if (JSON.stringify(input).length > MAX_MESSAGE_LENGTH) unsupported('Запрос превышает допустимый размер.');
+  const adapted = adaptRequest(input);
+  if (adapted) {
+    if (adapted.commonInput) return { ...normalizeRequest(adapted.commonInput), moduleId: adapted.moduleId, ...(adapted.constraints ? { signerParams: adapted.constraints } : {}) };
+    if (adapted.moduleId === 'qiwi') adapted.callId = input.args[0];
+    return adapted;
+  }
   const { module, method, args } = input;
   if (module === COMMON) {
     if (method === 'getActiveTokens') return { immediate: true, value: [] };
@@ -57,10 +64,10 @@ export function normalizeRequest(input) {
 }
 
 export function successResponse(input, result) {
-  return input.module === BASICS ? { status: true, body: result } : { code: '200', message: '', responseObject: result };
+  return adapterResponse(input, result) || (input.module === BASICS ? { status: true, body: result } : { code: '200', message: '', responseObject: result });
 }
 export function errorResponse(input, message, cancelled = false) {
-  return input?.module === BASICS
+  return adapterResponse(input, undefined, message, cancelled) || (input?.module === BASICS
     ? (cancelled ? { status: true, body: {} } : { status: false, code: 'UNSUPPORTED_OR_FAILED', message })
-    : { code: cancelled ? '500' : '400', message, responseObject: null };
+    : { code: cancelled ? '500' : '400', message, responseObject: null });
 }

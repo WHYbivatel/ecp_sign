@@ -1,3 +1,4 @@
+document.querySelector('#modules').addEventListener('click', () => { location.assign((globalThis.browser || chrome).runtime.getURL('modules/index.html')); });
 const api = globalThis.browser || chrome;
 const status = document.querySelector('#status');
 const enable = document.querySelector('#enable');

@@ -16,7 +16,8 @@ test('extension uses no native host, no externally callable API, and allows only
 
 test('keys are confined to the signing worker and never stored or sent over runtime messages', async () => {
   const background = await readFile(new URL('background/background.js', source), 'utf8');
-  assert.doesNotMatch(background, /storage\.local|password|privateKey|container/);
+  assert.doesNotMatch(background, /storage\.local\.(set|remove|clear)|password|privateKey|container/);
+  assert.ok([...background.matchAll(/storage\.local\.get\(([^)]*)\)/g)].every(match => match[1] === "'moduleSettings'"));
   const worker = await readFile(new URL('crypto/worker.js', source), 'utf8');
   assert.doesNotMatch(worker, /chrome\.|browser\.|\bfetch\(|XMLHttpRequest|WebSocket|localStorage|indexedDB/);
   const approval = await readFile(new URL('signing/approve.js', source), 'utf8');

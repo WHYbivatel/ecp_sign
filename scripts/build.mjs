@@ -8,7 +8,7 @@ for (const target of ['chromium', 'firefox']) {
   const destination = new URL(`../dist/${target}/`, import.meta.url);
   await rm(destination, { recursive: true, force: true });
   await mkdir(destination, { recursive: true });
-  for (const asset of ['index.html', 'styles.css', 'theme.css', 'assets', 'signing/approve.html', 'signing/approve.css', 'content/inject.js', 'content/bridge.js']) {
+  for (const asset of ['index.html', 'styles.css', 'theme.css', 'assets', 'modules/index.html', 'modules/modules.css', 'signing/approve.html', 'signing/approve.css', 'content/inject.js', 'content/bridge.js']) {
     await cp(new URL(asset, source), new URL(asset, destination), { recursive: true });
   }
   const output = structuredClone(manifest);
@@ -20,6 +20,7 @@ for (const target of ['chromium', 'firefox']) {
   await writeFile(new URL('manifest.json', destination), JSON.stringify(output, null, 2) + '\n');
   await build({
     entryPoints: {
+      'modules/modules': fileURLToPath(new URL('modules/modules.js', source)),
       'popup': fileURLToPath(new URL('popup/popup.js', source)),
       'background': fileURLToPath(new URL('background/background.js', source)),
       'signing/approve': fileURLToPath(new URL('signing/approve.js', source)),
