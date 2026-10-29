@@ -393,7 +393,7 @@ try {
   await popup.locator('#cancel').click(); answer = await result(); assert.equal(answer.errorCode, '500');
   await moduleCard.getByLabel('Включить Госзакупки · NURSign').check();
   await manager.waitForFunction(async () => (await chrome.storage.local.get('moduleSettings')).moduleSettings.goszakup.enabled);
-  await moduleCard.locator('summary').click();
+  await moduleCard.locator(':scope > details > summary').click();
   await moduleCard.locator('textarea').fill(`http://127.0.0.1:${port}`);
   await moduleCard.locator('select').selectOption('deny'); await moduleCard.locator('input[type="number"]').fill('1');
   await moduleCard.getByRole('button', { name: 'Сохранить настройки' }).click();
@@ -401,7 +401,7 @@ try {
   await send({ module: 'NURSign', type: 'text', data: 'test' }); answer = await result(); assert.match(answer.errorMessage, /обязательную метку/);
   await send({ module: 'NURSign', type: 'multixml', data: ['<a/>','<b/>'] }); answer = await result(); assert.match(answer.errorMessage, /Число/);
   await manager.reload(); await manager.locator('[data-module="goszakup"]').waitFor();
-  await manager.locator('[data-module="goszakup"] summary').click();
+  await manager.locator('[data-module="goszakup"] > details > summary').click();
   assert.equal(await manager.locator('[data-module="goszakup"] select').inputValue(), 'deny');
   await manager.setViewportSize({ width: 400, height: 850 });
   assert.ok(await manager.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Module manager must fit mobile width');
