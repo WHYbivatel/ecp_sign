@@ -140,7 +140,7 @@ try {
   popup = await portalOnOpen(nucRequest);
   await popup.locator('#key-file').setInputFiles({ name: 'signing-only-test.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(signingOnly.container) });
   await popup.locator('#password').fill(PASSWORD); await popup.locator('#unlock').click();
-  await popup.locator('#status[data-error]').filter({ hasText: 'AUTH_RSA' }).waitFor();
+  await popup.locator('#status[data-error]').filter({ hasText: 'единый ГОСТ' }).waitFor();
   assert.equal(await popup.locator('#approve').isDisabled(), true);
   assert.equal(await popup.locator('#certificate[data-diagnostic]').isVisible(), true);
   assert.match(await popup.locator('#cert-usage').innerText(), /1\.3\.6\.1\.5\.5\.7\.3\.4/);
@@ -154,6 +154,23 @@ try {
   const cancelledPortal = await page.evaluate(() => window.portalResult);
   assert.deepEqual(cancelledPortal, { status: true, body: {} });
   await page.evaluate(() => window.portalSocket.close());
+  // A self-signed GOST key with copied NUC purpose OIDs and a site-provided
+  // anchor must not acquire the pinned NUC issuer policy.
+  const imitation = gostFixture('512', { eku: ['1.3.6.1.5.5.7.3.4', '1.2.398.3.3.4.1.1'], keyUsage: true });
+  const imitationPem = forge.pem.encode({ type: 'CERTIFICATE', body: forge.util.decode64(imitation.certificate) });
+  const imitationRequest = structuredClone(nucRequest);
+  imitationRequest.args.signerParams.chain = [imitationPem];
+  popup = await portalOnOpen(imitationRequest);
+  await popup.locator('#key-file').setInputFiles({ name: 'renamed-unified-imitation.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(imitation.container) });
+  await popup.locator('#password').fill(PASSWORD); await popup.locator('#unlock').click();
+  await popup.locator('#status[data-error]').filter({ hasText: 'единый ГОСТ' }).waitFor();
+  assert.equal(await popup.locator('#approve').isDisabled(), true);
+  assert.equal(await popup.locator('#cert-policy-note').isHidden(), true);
+  assert.equal(await popup.locator('#trust-state[data-trusted]').isVisible(), true, 'Site-provided anchor is trusted but cannot grant NUC policy');
+  assert.equal(await page.evaluate(() => window.portalMessages.length), 0);
+  await popup.locator('#cancel').click(); await page.evaluate(() => window.portalResult);
+  await page.evaluate(() => window.portalSocket.close()); imitation.container.fill(0);
+  console.log('PASS: site-trusted imitation GOST subscriber cannot claim pinned NUC unified authentication policy');
   authentication.container.fill(0); signingOnly.container.fill(0);
   console.log('PASS: a document-signing-only certificate cannot authenticate; clear explanation and no signed response');
 

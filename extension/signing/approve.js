@@ -170,8 +170,10 @@ function showCertificate(certificate, readOnly = false) {
   $('#key-form').hidden = true; $('#certificate').hidden = false;
   $('#holder').textContent = certificate.name || 'Сертификат ЭЦП';
   $('#cert-details').textContent = `${certificate.algorithm}\nДействует с ${new Date(certificate.notBefore).toLocaleDateString('ru-RU')} до ${new Date(certificate.notAfter).toLocaleDateString('ru-RU')}${certificate.organization ? '\n' + certificate.organization : ''}`;
-  const purposes = { '1.3.6.1.5.5.7.3.2': 'Аутентификация клиента (вход на сайт)', '1.3.6.1.5.5.7.3.4': 'Защита электронной почты' };
+  const purposes = { '1.3.6.1.5.5.7.3.2': 'Аутентификация клиента (вход на сайт)', '1.3.6.1.5.5.7.3.4': 'Электронная подпись (emailProtection)' };
   $('#cert-usage').textContent = certificate.extendedKeyUsageOids?.length ? certificate.extendedKeyUsageOids.map(oid => `${purposes[oid] || 'Назначение'} · ${oid}`).join('\n') : 'Расширение EKU отсутствует.';
+  $('#cert-policy-note').hidden = !certificate.unifiedNca;
+  $('#cert-policy-note').textContent = certificate.unifiedNca ? 'Единый ГОСТ-ключ НУЦ РК: для подписи и аутентификации. Цепочка НУЦ проверена.' : '';
   const trusted = certificate.trust?.trusted;
   $('#trust-state').toggleAttribute('data-trusted', Boolean(trusted));
   $('#trust-state').textContent = trusted ? (certificate.trust.scope === 'site' ? 'Цепочка УЦ, указанного сайтом, проверена' : 'Цепочка НУЦ РК подтверждена') : 'Цепочка доверия не подтверждена';

@@ -1,4 +1,4 @@
-import { checkSignerConstraints } from './constraints.js';
+import { checkSignerConstraints, isUnifiedNcaCertificate } from './constraints.js';
 import { openContainer } from './signer.js';
 import { signCms } from './cms.js';
 import { signXml } from './xml.js';
@@ -26,6 +26,8 @@ self.onmessage = async ({ data }) => {
       const anchors = chain?.length ? chain.map(pem => binaryBytes(forge.pem.decode(pem)[0].body)) : undefined;
       trust = await verifyChain(signer.info, signer.certificates, { anchors });
       trust.scope = anchors ? 'site' : 'nca';
+      trust.ncaTrusted = anchors ? (await verifyChain(signer.info, signer.certificates)).trusted : trust.trusted;
+      signer.info.summary.unifiedNca = isUnifiedNcaCertificate(signer.info, trust);
       signer.info.summary.fingerprint = [...new Uint8Array(await crypto.subtle.digest('SHA-256', binaryBytes(signer.info.raw)))].map(value => value.toString(16).padStart(2, '0')).join('');
       checkConstraints(request);
       self.postMessage({ kind: 'opened', certificate: { ...signer.info.summary, trust } });
@@ -57,7 +59,7 @@ self.onmessage = async ({ data }) => {
     } else if (data.kind === 'sign') {
       if (!signer) throw new Error('Сначала откройте ключ.');
       const request = data.request;
-      if (Date.now() > Date.parse(signer.info.summary.notAfter)) throw new Error('Срок сертификата истёк.');
+      if (Date.now() < Date.parse(signer.info.summary.notBefore) || Date.now() > Date.parse(signer.info.summary.notAfter)) throw new Error('Срок действия сертификата ещё не наступил или уже истёк.');
       checkConstraints(request);
       const results = [];
       const timestamps = [];

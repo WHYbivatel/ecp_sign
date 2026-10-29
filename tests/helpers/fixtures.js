@@ -21,7 +21,7 @@ export function rsaFixture({ purpose } = {}) {
   } finally { rmSync(folder, { recursive: true, force: true }); }
 }
 
-export function gostFixture(family = '512') {
+export function gostFixture(family = '512', { eku = [], keyUsage = false } = {}) {
   const scheme = family === '2004' ? { version: 2001, length: 256, namedCurve: 'S-256-A', oid: O.gost2004, curveOid: '1.2.398.3.10.1.1.1.1.1', hash: O.hash2004, sig: O.sig2004 } : family === '256' ? { version: 2012, length: 256, curve: nca256, oid: O.gost256, curveOid: '1.2.398.3.10.1.1.2.1.1', hash: O.hash256, sig: O.sig256 } : { version: 2012, length: 512, namedCurve: 'T-512-A', oid: O.gost512, curveOid: '1.2.398.3.10.1.1.2.2.1', hash: O.hash512, sig: O.sig512 };
   const engine = new GostSign(scheme);
   const pair = engine.generateKey();
@@ -30,7 +30,10 @@ export function gostFixture(family = '512') {
   const spki = seq(pkcs8.value[1], A.create(0, A.Type.BITSTRING, false, '\0' + der(octet(new Uint8Array(pair.publicKey)))));
   const date = value => A.create(0, A.Type.GENERALIZEDTIME, false, A.dateToGeneralizedTime(value));
   const tbs = seq(context(0, [integer(2)]), integer(1), algorithm(scheme.sig), name,
-    seq(date(new Date(Date.now() - 86400000)), date(new Date(Date.now() + 86400000))), name, spki);
+    seq(date(new Date(Date.now() - 86400000)), date(new Date(Date.now() + 86400000))), name, spki, ...(eku.length || keyUsage ? [context(3, [seq(
+      ...(eku.length ? [seq(oid('2.5.29.37'), octet(der(seq(...eku.map(oid)))))] : []),
+      ...(keyUsage ? [seq(oid('2.5.29.15'), octet(der(A.create(0, A.Type.BITSTRING, false, '\x06\xc0'))))] : [])
+    )])] : []));
   const hash = new GostDigest({ version: scheme.version === 2001 ? 1994 : 2012, length: scheme.length, sBox: 'D-TEST' }).digest(bytes(der(tbs)));
   const signature = new Uint8Array(engine.sign(pair.privateKey, hash));
   const cert = seq(tbs, algorithm(scheme.sig), A.create(0, A.Type.BITSTRING, false, '\0' + binary(signature)));
