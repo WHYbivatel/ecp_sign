@@ -36,6 +36,7 @@ try {
   context.on('request', request => { if (/^https?:/.test(request.url())) network.push(request.url()); });
   await context.route('**/*', route => {
     const url = route.request().url();
+    if (url === 'https://egov.kz/tegin-ui-test') return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><title>Tegin local UI fixture</title><h1>Artificial authentication request</h1>' });
     if (url.startsWith(`http://127.0.0.1:${port}/`) || url.startsWith('chrome-extension:') || (liveTsp && url === 'http://tsp.pki.gov.kz/')) route.continue();
     else route.abort();
   });
@@ -144,6 +145,8 @@ try {
   await popup.locator('#status[data-error]').filter({ hasText: 'единый ГОСТ' }).waitFor();
   assert.equal(await popup.locator('#approve').isDisabled(), true);
   assert.equal(await popup.locator('#certificate[data-diagnostic]').isVisible(), true);
+  assert.equal(await popup.locator('#certificate-technical').getAttribute('open'), null);
+  await popup.locator('#certificate-technical > summary').click();
   assert.match(await popup.locator('#cert-usage').innerText(), /1\.3\.6\.1\.5\.5\.7\.3\.4/);
   assert.doesNotMatch(await popup.locator('#cert-usage').innerText(), /1\.3\.6\.1\.5\.5\.7\.3\.2/);
   await popup.locator('#change-key').click();
@@ -414,6 +417,47 @@ try {
   await sw.evaluate(() => chrome.storage.local.clear()); moduleKey.container.fill(0);
   console.log('PASS: module manager catalog/search/mobile layout, persistent preferences, disabling and revoking pending signing, required timestamp and batch limits');
 
+  // The eGov origin is intercepted by the local test route: no real portal
+  // session, account or document is involved.
+  const loginPage = await context.newPage(); await loginPage.goto('https://egov.kz/tegin-ui-test');
+  const authUiKey = rsaFixture({ purpose: 'clientAuth' });
+  const loginRequest = { module: 'kz.gov.pki.knca.basics', method: 'sign', args: { format: 'xml', data: '<login><client-type>PORTAL</client-type></login>', signingParams: {}, signerParams: { extKeyUsageOids: ['1.3.6.1.5.5.7.3.2'], chain: [] } } };
+  async function loginConfirmation(request) {
+    const opened = context.waitForEvent('page');
+    await loginPage.evaluate(request => {
+      window.uiSocket = new WebSocket('wss://127.0.0.1:13579/');
+      window.uiAnswer = new Promise(resolve => { window.uiSocket.onopen = () => window.uiSocket.send(JSON.stringify(request)); window.uiSocket.onmessage = event => resolve(JSON.parse(event.data)); });
+    }, request);
+    const approval = await opened; await approval.waitForLoadState(); return approval;
+  }
+  popup = await loginConfirmation(loginRequest);
+  await popup.locator('#title').filter({ hasText: 'Вход на сайт' }).waitFor();
+  assert.equal(await popup.locator('#preview').isVisible(), false);
+  assert.equal(await popup.locator('#operation-details').getAttribute('open'), null);
+  await popup.locator('#operation-details > summary').click();
+  assert.match(await popup.locator('#preview').innerText(), /<login>/);
+  await popup.locator('#operation-details > summary').click();
+  await popup.locator('#key-file').setInputFiles({ name: 'public-ui-fixture.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(authUiKey.container) });
+  await popup.locator('#password').fill(PASSWORD); await popup.locator('#unlock').click();
+  await popup.locator('#certificate:not([hidden])').waitFor();
+  assert.match(await popup.locator('#cert-details').innerText(), /Действителен до/);
+  assert.equal(await popup.locator('#cert-suitability').innerText(), 'Подходит для входа');
+  assert.equal(await popup.locator('#cert-usage').isVisible(), false);
+  await popup.locator('#certificate-technical > summary').click();
+  assert.match(await popup.locator('#cert-usage').innerText(), /1\.3\.6\.1\.5\.5\.7\.3\.2/);
+  await popup.locator('#certificate-technical > summary').click();
+  await popup.screenshot({ path: resolve('artifacts/approval-simple.png'), fullPage: true });
+  await popup.locator('#approve').click();
+  const loginAnswer = await loginPage.evaluate(() => window.uiAnswer); assert.equal(loginAnswer.status, true);
+  await loginPage.evaluate(() => window.uiSocket.close());
+  popup = await loginConfirmation({ ...loginRequest, args: { ...loginRequest.args, data: '<login><client-type>PORTAL</client-type><amount>500</amount></login>' } });
+  assert.equal(await popup.locator('#title').innerText(), 'Подписать документ');
+  assert.equal(await popup.locator('#preview').isVisible(), true);
+  assert.match(await popup.locator('#preview').innerText(), /<amount>500/);
+  await popup.locator('#cancel').click(); await loginPage.evaluate(() => window.uiAnswer);
+  await loginPage.close(); authUiKey.container.fill(0);
+  console.log('PASS: concise known login summary and certificate details; extra XML fields retain full document preview');
+
   const previousMessages = await page.evaluate(() => window.bridgeMessages.join(''));
   popup = await confirmation(common);
   const closed = popup.waitForEvent('close');
@@ -423,7 +467,7 @@ try {
 
   const sensitive = previousMessages + await page.evaluate(() => window.bridgeMessages.join(''));
   assert.ok(!sensitive.includes(PASSWORD));
-  assert.ok(network.every(url => url.startsWith(`http://127.0.0.1:${port}/`) || (liveTsp && url === 'http://tsp.pki.gov.kz/')), network.join('\n'));
+  assert.ok(network.every(url => url === 'https://egov.kz/tegin-ui-test' || url.startsWith(`http://127.0.0.1:${port}/`) || (liveTsp && url === 'http://tsp.pki.gov.kz/')), network.join('\n'));
   assert.deepEqual(errors, []);
   const stored = await sw.evaluate(async () => ({ local: await chrome.storage.local.get(null), session: await chrome.storage.session.get(null) }));
   assert.deepEqual(stored.local, {});

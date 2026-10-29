@@ -1,3 +1,4 @@
+import { serviceOperation } from '../lib/operation-summary.js';
 import { base64, unbase64, bytes as binaryBytes } from '../lib/bytes.js';
 
 const $ = selector => document.querySelector(selector);
@@ -69,15 +70,25 @@ $('#change-key').addEventListener('click', () => { lock(); report('Введит�
 
 async function showData() {
   const revision = ++previewGeneration;
+  $('#data-panel').removeAttribute('data-service');
+  $('#data-heading').textContent = 'Документ';
+  $('#operation-details').open = true; $('#operation-details-label').textContent = 'Просмотр документа';
   $('#preview').textContent = verifyMode ? 'Выберите файл CMS/CAdES для проверки.' : 'Выберите документ для подписи.'; $('#source').textContent = '';
   $('#data-description').textContent = verifyMode ? 'Проверка подписи не требует ключа ЭЦП.' : 'Выберите документ, который нужно подписать.';
   $('#document-meta').hidden = true; $('#timestamp-note').hidden = !request?.timestamp;
   $('#document-count').textContent = '';
   if (!request) return;
   const info = request.operation === 'info';
+  const service = id ? serviceOperation(request, $('#origin').textContent) : null;
+  $('#data-panel').toggleAttribute('data-service', Boolean(service || info));
+  $('#data-heading').textContent = service ? 'Запрос сайта' : info ? 'Передача сведений' : 'Документ';
+  $('#operation-details').open = !service && !info;
+  $('#operation-details-label').textContent = service || info ? 'Подробности' : 'Просмотр документа';
+  if (service) { $('#title').textContent = service.title; $('#subtitle').textContent = 'Проверьте адрес сайта и выберите ключ ЭЦП.'; $('#approve-label').textContent = service.button; }
   const label = request.timestamp ? 'CAdES-T' : request.cades ? 'CAdES-BES' : request.format.toUpperCase();
-  $('#operation').textContent = info ? 'Сведения о сертификате' : `${label} · ${request.digested ? 'хеш документа' : request.documents.length + ' док.'}`;
+  $('#operation').textContent = service ? 'Подтверждение' : info ? 'Сведения о сертификате' : `${label} · ${request.digested ? 'хеш документа' : request.documents.length + ' док.'}`;
   $('#data-description').textContent = info ? 'Сайт получит публичный сертификат. Закрытый ключ не передаётся.' : request.digested ? 'Сайт передал только хеш. Сам документ недоступен для просмотра. Подтверждая операцию, вы подписываете этот хеш.' : 'Проверьте документ: подпись будет создана для переданных данных.';
+  if (service) $('#data-description').textContent = service.description;
   $('#footer-note').lastChild.textContent = request.digested ? 'Подтверждение подписи хеша' : 'Подпись только с вашего согласия';
   if (info) { $('#preview').textContent = 'Для этой операции документ не требуется.'; $('#source').textContent = 'Публичные сведения о выбранном сертификате.'; return; }
   const previews = [], sources = []; let total = 0; const hashes = [];
@@ -169,16 +180,23 @@ function showCertificate(certificate, readOnly = false) {
   $('#change-key').textContent = readOnly ? 'Выбрать другой' : 'Сменить';
   $('#key-form').hidden = true; $('#certificate').hidden = false;
   $('#holder').textContent = certificate.name || 'Сертификат ЭЦП';
-  $('#cert-details').textContent = `${certificate.algorithm}\nДействует с ${new Date(certificate.notBefore).toLocaleDateString('ru-RU')} до ${new Date(certificate.notAfter).toLocaleDateString('ru-RU')}${certificate.organization ? '\n' + certificate.organization : ''}`;
+  const start = new Date(certificate.notBefore), end = new Date(certificate.notAfter), now = Date.now();
+  $('#cert-details').textContent = now > end.getTime() ? `Срок истёк ${end.toLocaleDateString('ru-RU')}` : now < start.getTime() ? `Действует с ${start.toLocaleDateString('ru-RU')}` : `Действителен до ${end.toLocaleDateString('ru-RU')}`;
+  $('#cert-validity-details').textContent = `${certificate.algorithm}\nС ${start.toLocaleDateString('ru-RU')} до ${end.toLocaleDateString('ru-RU')}${certificate.organization ? '\n' + certificate.organization : ''}`;
+  $('#certificate-technical').open = false;
+  const forLogin = request?.signerParams?.extKeyUsageOids?.includes('1.3.6.1.5.5.7.3.2');
+  $('#cert-suitability').textContent = readOnly ? 'Не подходит для этой операции' : certificate.unifiedNca ? 'Подходит для подписи и входа' : forLogin ? 'Подходит для входа' : request?.operation === 'info' ? 'Публичные сведения сертификата' : 'Готов к подписанию';
+  $('#cert-suitability').toggleAttribute('data-error', readOnly);
   const purposes = { '1.3.6.1.5.5.7.3.2': 'Аутентификация клиента (вход на сайт)', '1.3.6.1.5.5.7.3.4': 'Электронная подпись (emailProtection)' };
   $('#cert-usage').textContent = certificate.extendedKeyUsageOids?.length ? certificate.extendedKeyUsageOids.map(oid => `${purposes[oid] || 'Назначение'} · ${oid}`).join('\n') : 'Расширение EKU отсутствует.';
   $('#cert-policy-note').hidden = !certificate.unifiedNca;
   $('#cert-policy-note').textContent = certificate.unifiedNca ? 'Единый ГОСТ-ключ НУЦ РК: для подписи и аутентификации. Цепочка НУЦ проверена.' : '';
   const trusted = certificate.trust?.trusted;
   $('#trust-state').toggleAttribute('data-trusted', Boolean(trusted));
-  $('#trust-state').textContent = trusted ? (certificate.trust.scope === 'site' ? 'Цепочка УЦ, указанного сайтом, проверена' : 'Цепочка НУЦ РК подтверждена') : 'Цепочка доверия не подтверждена';
+  $('#trust-state').textContent = trusted ? (certificate.trust.ncaTrusted || certificate.trust.scope === 'nca' ? 'Цепочка НУЦ подтверждена' : 'Цепочка сайта подтверждена') : 'Цепочка доверия не подтверждена';
   $('#trust-note').textContent = trusted ? 'Подпись ключа и срок действия проверены локально.' : 'Ключ соответствует сертификату, но его УЦ не распознан. Подтверждайте операцию, только если доверяете этому сертификату.';
-  if (readOnly) $('#trust-note').textContent = 'Это сведения для выяснения причины отказа. Ключ закрыт, подписание недоступно.';
+  $('#trust-note').hidden = Boolean(trusted) && !readOnly;
+  if (readOnly) $('#trust-note').textContent = 'Причина отказа указана ниже. Подробности сертификата можно раскрыть.';
   $('#cert-identifier').textContent = [certificate.iin, certificate.bin].filter(Boolean).join(' / ') || 'Не указан';
   $('#cert-serial').textContent = certificate.serialNumber;
   $('#cert-fingerprint').textContent = certificate.fingerprint || '—';

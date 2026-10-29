@@ -15,3 +15,5 @@ body{overflow-y:scroll}main{padding-top:24px}.page-heading{min-height:70px;margi
 .certificate-purpose small { color: #667188; }
 #cert-usage { white-space: pre-line; overflow-wrap: anywhere; margin: 6px 0 0; font-size: 13px; line-height: 1.6; }
 #certificate[data-diagnostic] { border-color: #e5c488; }
+
+.operation-details>summary{padding:12px 17px;color:var(--muted);cursor:pointer;font-size:11px;border-top:1px solid var(--line)}.operation-details .viewer-tabs{padding-top:4px}#data-panel>.viewer-description{padding:0 17px 16px;min-height:0;font-size:11px;line-height:1.7}#data-panel[data-service] .viewer-header{padding-bottom:8px}#data-panel[data-service] pre{min-height:0}.cert-suitability{font-size:11px;color:var(--green);margin:0 0 12px}.cert-suitability[data-error]{color:var(--amber)}#cert-validity-details{white-space:pre-line}.certificate-details .certificate-purpose{background:none;padding:0;margin:14px 0}.certificate-details #cert-usage{font-size:10px}.certificate-details .field-note{font-size:10px}
