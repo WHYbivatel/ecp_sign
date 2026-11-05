@@ -3,15 +3,15 @@
   "releases": [
     {
       "platform": "android",
-      "version": "0.1.12",
-      "versionCode": 12,
+      "version": "0.1.13",
+      "versionCode": 13,
       "package": "kz.kazedo.signer",
-      "file": "kazedo-signer-0.1.12.apk",
-      "url": "https://tegin.esl.kz/downloads/kazedo-signer-0.1.12.apk",
-      "size": 6929771,
-      "sha256": "27fbabdc5ce9862c04adb224b2aad3aa3e22439c5386136961255d348cc37473",
+      "file": "kazedo-signer-0.1.13.apk",
+      "url": "https://tegin.esl.kz/downloads/kazedo-signer-0.1.13.apk",
+      "size": 6965127,
+      "sha256": "ab04a1191bfaadfe406d6afc3a24ba39d9557fa4376f82fde4c68df92c131934",
       "signerCertificateSha256": "d986524cf037ddbf28cd9891e29568a46d56c9da88d4763cf6c7e5c14eabe82a",
-      "sourceCommit": "1ca4f00",
+      "sourceCommit": "f36e95c",
       "publishedAt": "2026-11-05"
     }
   ]

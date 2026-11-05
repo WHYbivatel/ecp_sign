@@ -32,11 +32,12 @@ const androidLink = new RegExp(
 );
 assert.match(html, androidLink, 'Android download link differs from releases.json');
 assert.ok(html.includes(`Android 8+ · Tegin Sign ${android.version}`), 'Android version label is stale');
-assert.ok(html.includes('Для входа и подписания в Tegin ЭДО'), 'Android purpose text is missing');
+assert.ok(html.includes('Локально подписывайте файлы и проверяйте CMS-подписи'), 'Android local purpose text is missing');
+assert.ok(html.includes('live-интеграция ЭДО недоступна и не проверена'), 'EDO TLS limitation notice is missing');
 for (const step of [
   'Скачайте APK на телефон.',
   'Откройте файл и разрешите установку из этого источника, если Android запросит.',
-  'Откройте документ или вход в Tegin ЭДО и выберите Tegin Sign.',
+  'Откройте Tegin Sign и выберите «Подписать файл» или «Проверить подпись».',
 ]) assert.ok(html.includes(step), `installation instruction is missing: ${step}`);
 
 assert.ok(html.includes('/downloads/tegin-chromium-0.5.2.zip'), 'Chromium/Edge download link was removed');
