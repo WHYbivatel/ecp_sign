@@ -139,6 +139,38 @@ try {
   assert.equal(portalAnswer.status, true); assert.match(portalAnswer.body.result[0], /ds:SignatureValue/);
   await page.evaluate(() => window.portalSocket.close());
   console.log('PASS: NUC-style null TSA + twelve roots + legacy root + authentication EKU, direct onopen client receives signed XML');
+
+  // Exact Tegin NCALayerService wire profiles: UTF-8/base64 challenge attached,
+  // then downloaded document bytes detached. No Tegin API payload includes key/password.
+  const challenge = 'tegin-auth-challenge-v1-123456';
+  const authCmsRequest = { module: basics.module, method: 'sign', args: { allowedStorages: null, format: 'cms',
+    data: Buffer.from(challenge, 'utf8').toString('base64'),
+    signingParams: { decode: true, encapsulate: true, digested: false },
+    signerParams: { extKeyUsageOids: ['1.3.6.1.5.5.7.3.2'], chain: [] }, locale: 'ru' } };
+  popup = await confirmation(authCmsRequest, authentication);
+  await popup.locator('#approve').click();
+  const authWireAnswer = await result();
+  assert.equal(authWireAnswer.status, true);
+  const authCms = new Uint8Array(Buffer.from(authWireAnswer.body.result[0], 'base64'));
+  const verifiedAuth = await verifyCms(authCms);
+  assert.deepEqual(Buffer.from(verifiedAuth.content), Buffer.from(challenge, 'utf8'));
+  console.log('PASS: Tegin authChallenge bytes encoded by frontend profile are returned as attached CMS and verified independently');
+
+  const documentBytes = Buffer.from('%PDF-1.4\nTegin synthetic document-sign fixture\n');
+  const documentWireRequest = { module: basics.module, method: 'sign', args: { allowedStorages: null, format: 'cms',
+    data: documentBytes.toString('base64'),
+    signingParams: { decode: true, encapsulate: false, digested: false },
+    signerParams: { extKeyUsageOids: ['1.3.6.1.5.5.7.3.4'], chain: [] }, locale: 'ru' } };
+  popup = await confirmation(documentWireRequest, signingOnly);
+  await popup.locator('#approve').click();
+  const documentWireAnswer = await result();
+  assert.equal(documentWireAnswer.status, true);
+  const documentCms = new Uint8Array(Buffer.from(documentWireAnswer.body.result[0], 'base64'));
+  assert.equal((await verifyCms(documentCms, { detached: new Uint8Array(documentBytes) })).valid, true);
+  const changedTeginPdf = new Uint8Array(documentBytes); changedTeginPdf[0] ^= 1;
+  await assert.rejects(verifyCms(documentCms, { detached: changedTeginPdf }));
+  console.log('PASS: Tegin downloaded-document profile returns detached CMS; exact bytes pass, changed bytes fail');
+
   popup = await portalOnOpen(nucRequest);
   await popup.locator('#key-file').setInputFiles({ name: 'signing-only-test.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(signingOnly.container) });
   await popup.locator('#password').fill(PASSWORD); await popup.locator('#unlock').click();
