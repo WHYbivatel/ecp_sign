@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f6fb">
+  <meta name="description" content="Tegin — браузерное расширение для электронной подписи на вашем устройстве.">
+  <title>Tegin — электронная подпись в браузере</title>
+  <link rel="icon" href="/brand.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Tegin — главная">
+      <span class="brand-mark">T</span><span>Tegin</span>
+    </a>
+    <span class="privacy"><span class="lock" aria-hidden="true">◈</span> Ключ остаётся на вашем устройстве</span>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="title">
+      <div class="hero-copy">
+        <p class="eyebrow">ЭЛЕКТРОННАЯ ПОДПИСЬ</p>
+        <h1 id="title">Подписывайте<br>прямо в браузере</h1>
+        <p class="lead">Выберите расширение для своего браузера и установите его за пару минут.</p>
+        <div class="downloads" aria-label="Скачать Tegin">
+          <a class="button button-primary" href="/downloads/tegin-chromium-0.5.2.zip" download>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/></svg>
+            Скачать для Chrome и Edge
+          </a>
+          <a class="button button-secondary" href="/downloads/tegin-firefox-0.5.2.zip" download>
+            Скачать для Firefox
+          </a>
+        </div>
+        <p class="version">Версия 0.5.2 · бесплатно</p>
+      </div>
+      <div class="hero-art" aria-hidden="true">
+        <div class="glow"></div>
+        <div class="app-card">
+          <div class="app-head"><span class="brand-mark small">T</span><span class="app-title">Подписание документа</span><span class="status-dot"></span></div>
+          <div class="doc-icon"><span></span><span></span><span></span></div>
+          <div class="doc-name">Договор.pdf</div>
+          <div class="doc-meta">Документ проверен</div>
+          <div class="sign-button"><span>✓</span> Подписать</div>
+          <div class="secure"><span>◇</span> Только на этом устройстве</div>
+        </div>
+        <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+      </div>
+    </section>
+
+    <section class="install" aria-labelledby="install-title">
+      <div class="section-heading">
+        <p class="eyebrow">БЫСТРЫЙ СТАРТ</p>
+        <h2 id="install-title">Установка за три шага</h2>
+      </div>
+      <div class="steps">
+        <article class="step"><span class="step-number">01</span><h3>Скачайте архив</h3><p>Нажмите кнопку для вашего браузера выше.</p></article>
+        <article class="step"><span class="step-number">02</span><h3>Распакуйте файл</h3><p>Откройте ZIP-архив и сохраните папку Tegin.</p></article>
+        <article class="step"><span class="step-number">03</span><h3>Добавьте расширение</h3><p>Откройте страницу расширений браузера и загрузите распакованную папку.</p></article>
+      </div>
+      <details class="browser-help">
+        <summary>Открыть страницу установки</summary>
+        <div class="help-links">
+          <a href="chrome://extensions">Chrome</a>
+          <a href="edge://extensions">Microsoft Edge</a>
+          <a href="about:debugging#/runtime/this-firefox">Firefox</a>
+        </div>
+        <p>В Chrome и Edge включите «Режим разработчика» и нажмите «Загрузить распакованное». В Firefox выберите «Загрузить временное дополнение» и укажите файл <code>manifest.json</code> из распакованной папки.</p>
+      </details>
+    </section>
+
+    <footer>
+      <span class="brand footer-brand"><span class="brand-mark tiny">T</span><span>Tegin</span></span>
+      <span>Подписание выполняется в браузере на вашем устройстве.</span>
+    </footer>
+  </main>
+</body>
+</html>
