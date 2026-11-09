@@ -8,10 +8,24 @@ function octets(node, depth = 0) {
   if (depth > 24 || node?.type !== A.Type.OCTETSTRING) throw new Error('Некорректные данные CMS.');
   return typeof node.value === 'string' ? node.value : node.value.map(child => octets(child, depth + 1)).join('');
 }
+const universal = (node, type) => node?.tagClass === A.Class.UNIVERSAL && node.type === type;
+const explicit = (node, tag) => node?.tagClass === A.Class.CONTEXT_SPECIFIC && node.type === tag && node.constructed && node.value.length === 1;
+// RFC 5652 5.1 shape. Fields outside the signature must not vary either, so a structure
+// other verifiers reject is not reported as a valid signature here.
+function checkShape(root) {
+  if (!universal(root, A.Type.SEQUENCE) || root.value.length !== 2 || !universal(root.value[0], A.Type.OID)) throw new Error('Ожидается CMS SignedData.');
+  if (oidValue(root.value[0]) !== O.signedData || !explicit(root.value[1], 0) || !universal(root.value[1].value[0], A.Type.SEQUENCE)) throw new Error('Ожидается CMS SignedData.');
+  const fields = root.value[1].value[0].value;
+  const [version, digestAlgorithms, encapsulated] = fields;
+  const optional = fields.slice(3, -1);
+  if (!universal(version, A.Type.INTEGER) || !universal(digestAlgorithms, A.Type.SET) || digestAlgorithms.value.some(node => !universal(node, A.Type.SEQUENCE) || !universal(node.value[0], A.Type.OID)) ||
+    !universal(encapsulated, A.Type.SEQUENCE) || !universal(encapsulated.value[0], A.Type.OID) || encapsulated.value.length > 2 || (encapsulated.value[1] && !explicit(encapsulated.value[1], 0)) ||
+    optional.length > 2 || optional.some((node, index) => node.tagClass !== A.Class.CONTEXT_SPECIFIC || !node.constructed || node.type > 1 || (index && node.type <= optional[index - 1].type))) throw new Error('Некорректная структура CMS.');
+}
 export function readCms(raw, detached, { allowMissingDocument = false } = {}) {
   if (raw.length > 8 * 1024 * 1024) throw new Error('Подпись превышает 8 МБ.');
   const root = parse(raw);
-  if (oidValue(root.value[0]) !== O.signedData) throw new Error('Ожидается CMS SignedData.');
+  checkShape(root);
   const signedData = root.value[1].value[0];
   const encapsulated = signedData.value[2];
   const contentType = oidValue(encapsulated.value[0]);
@@ -53,6 +67,7 @@ export async function verifyCms(raw, { detached, requireBinding = false, anchors
   const signers = [];
   for (const info of cms.infos) {
     const fields = info.value;
+    if (!universal(info, A.Type.SEQUENCE) || !universal(fields[0], A.Type.INTEGER)) throw new Error('Некорректная структура CMS.');
     const sid = fields[1];
     const matches = cms.certificates.filter(cert => sid.tagClass === A.Class.CONTEXT_SPECIFIC
       ? cert.subjectKeyId === sid.value
