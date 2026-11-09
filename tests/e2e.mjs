@@ -8,12 +8,18 @@ import assert from 'node:assert/strict';
 import { rsaFixture, gostFixture, PASSWORD } from './helpers/fixtures.js';
 import { verifyCms } from '../extension/crypto/cms-verify.js';
 import { forge, oid, der } from '../extension/crypto/encoding.js';
+import { SignedXml } from 'xml-crypto';
+import { DOMParser } from '@xmldom/xmldom';
 
 const folder = mkdtempSync(join(tmpdir(), 'ncabrowser-e2e-'));
 const extension = resolve('dist/chromium');
 const fixture = rsaFixture();
 const gost = gostFixture();
 const server = createServer((req, res) => {
+  if (req.url === '/ncalayer-client.js') {
+    res.setHeader('Content-Type', 'text/javascript; charset=utf-8');
+    return res.end(readFileSync(resolve('node_modules/ncalayer-js-client/ncalayer-client.js')));
+  }
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.end('<!doctype html><html lang="ru"><title>Тестовый сайт ЭЦП</title><h1>Тестовый сайт ЭЦП</h1><p>Используется только одноразовый тестовый ключ.</p></html>');
 });
@@ -36,7 +42,7 @@ try {
   context.on('request', request => { if (/^https?:/.test(request.url())) network.push(request.url()); });
   await context.route('**/*', route => {
     const url = route.request().url();
-    if (url === 'https://egov.kz/tegin-ui-test') return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><title>Tegin local UI fixture</title><h1>Artificial authentication request</h1>' });
+    if (url === 'https://egov.kz/tegin-ui-test' || url === 'https://nca.pki.gov.kz/tegin-ui-test') return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><title>Tegin local UI fixture</title><h1>Artificial authentication request</h1>' });
     if (url.startsWith(`http://127.0.0.1:${port}/`) || url.startsWith('chrome-extension:') || (liveTsp && url === 'http://tsp.pki.gov.kz/')) route.continue();
     else route.abort();
   });
@@ -547,6 +553,229 @@ try {
   await sw.evaluate(() => chrome.storage.local.clear()); moduleKey.container.fill(0);
   console.log('PASS: module manager catalog/search/mobile layout, persistent preferences, disabling and revoking pending signing, required timestamp and batch limits');
 
+  // Portal compatibility. Requests come from tests/fixtures/portals; the portal
+  // origins are served by the local route, so no real portal, account or NUC key is used.
+  const portal = name => JSON.parse(readFileSync(resolve(`tests/fixtures/portals/${name}.json`), 'utf8'));
+  const egovLogin = portal('egov-login'), nucCabinet = portal('nuc-cabinet-login');
+  const unlock = async (approval, key) => {
+    await approval.locator('#key-file').setInputFiles({ name: 'disposable-test.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(key.container) });
+    await approval.locator('#password').fill(PASSWORD); await approval.locator('#unlock').click();
+  };
+  const verifyXml = (xml, certificate) => {
+    const verifier = new SignedXml({ publicCert: certificate, getCertFromKeyInfo: () => null });
+    verifier.loadSignature(new DOMParser().parseFromString(xml, 'application/xml').getElementsByTagNameNS('http://www.w3.org/2000/09/xmldsig#', 'Signature')[0]);
+    return verifier.checkSignature(xml);
+  };
+
+  // SIGEX ncalayer-js-client 1.6.1: waits for the greeting, probes KAZTOKEN, then uses basics and commonUtils.
+  const clientPage = await context.newPage();
+  await clientPage.goto(`http://127.0.0.1:${port}/sigex-client`);
+  await clientPage.addScriptTag({ url: `http://127.0.0.1:${port}/ncalayer-client.js` });
+  const connected = await clientPage.evaluate(async () => {
+    window.client = new NCALayerClient('wss://127.0.0.1:13579', false);
+    window.settle = promise => { window.pending = promise.then(value => ({ value }), error => ({ error: error.message, cancelled: error.canceledByUser === true })); };
+    const version = await client.connect();
+    return { version, kmd: client.isKmd, tokens: await client.getActiveTokens() };
+  });
+  assert.deepEqual(connected, { version: '1.4', kmd: false, tokens: [] });
+  const clientResult = () => clientPage.evaluate(() => window.pending);
+  let nextPage = context.waitForEvent('page');
+  await clientPage.evaluate(xml => settle(client.basicsSignXML(['PKCS12', 'AKKaztokenStore', 'AKKZIDCardStore'], xml, NCALayerClient.basicsXMLParams, NCALayerClient.basicsSignerTestAny)), egovLogin.request.args.data);
+  popup = await nextPage;
+  await popup.locator('#origin').filter({ hasText: `http://127.0.0.1:${port}` }).waitFor();
+  await unlock(popup, fixture); await popup.locator('#certificate:not([hidden])').waitFor({ timeout: 15000 });
+  await popup.locator('#approve').click();
+  const clientXml = await clientResult();
+  assert.ok(Array.isArray(clientXml.value) && clientXml.value.length === 1, JSON.stringify(clientXml).slice(0, 200));
+  assert.ok(clientXml.value[0].startsWith('<?xml version="1.0" encoding="UTF-8"?>'));
+  assert.equal(verifyXml(clientXml.value[0], fixture.certificate), true);
+  assert.throws(() => { if (!verifyXml(clientXml.value[0].replace('PORTAL', 'CHANGED'), fixture.certificate)) throw new Error('invalid'); });
+
+  const parts = [Buffer.from('Первый синтетический документ ЭДО'), Buffer.from('%PDF-1.4\nsecond synthetic document\n')];
+  nextPage = context.waitForEvent('page');
+  await clientPage.evaluate(parts => settle(client.basicsSignCMS(NCALayerClient.basicsStoragePKCS12,
+    parts.map(part => Uint8Array.from(atob(part), char => char.charCodeAt(0)).buffer), NCALayerClient.basicsCMSParamsDetachedNoTSP, NCALayerClient.basicsSignerTestAny)), parts.map(part => part.toString('base64')));
+  popup = await nextPage;
+  await unlock(popup, fixture); await popup.locator('#certificate:not([hidden])').waitFor({ timeout: 15000 });
+  await popup.locator('#approve').click();
+  const clientCms = await clientResult();
+  assert.equal(clientCms.value?.length, 2, JSON.stringify(clientCms).slice(0, 200));
+  writeFileSync(join(folder, 'client-cert.pem'), fixture.certificate);
+  for (const [index, part] of parts.entries()) {
+    writeFileSync(join(folder, `client-${index}.p7s`), Buffer.from(clientCms.value[index], 'base64'));
+    writeFileSync(join(folder, `client-${index}.bin`), part);
+    const changed = Buffer.from(part); changed[0] ^= 1; writeFileSync(join(folder, `client-${index}-changed.bin`), changed);
+    const verifyDetached = content => execFileSync('openssl', ['cms', '-verify', '-binary', '-inform', 'DER', '-in', join(folder, `client-${index}.p7s`), '-content', join(folder, content), '-CAfile', join(folder, 'client-cert.pem'), '-purpose', 'any', '-out', join(folder, 'client-out')], { stdio: 'pipe' });
+    verifyDetached(`client-${index}.bin`);
+    assert.throws(() => verifyDetached(`client-${index}-changed.bin`));
+  }
+  assert.throws(() => execFileSync('openssl', ['cms', '-verify', '-binary', '-inform', 'DER', '-in', join(folder, 'client-0.p7s'), '-content', join(folder, 'client-1.bin'), '-CAfile', join(folder, 'client-cert.pem'), '-purpose', 'any', '-out', join(folder, 'client-out')], { stdio: 'pipe' }), 'each signature covers its own document');
+
+  nextPage = context.waitForEvent('page');
+  await clientPage.evaluate(data => settle(client.createCAdESFromBase64('PKCS12', data, 'SIGNATURE', true)), data.toString('base64'));
+  popup = await nextPage;
+  await unlock(popup, fixture); await popup.locator('#certificate:not([hidden])').waitFor({ timeout: 15000 });
+  await popup.locator('#approve').click();
+  const clientCades = await clientResult();
+  writeFileSync(join(folder, 'client-cades.p7s'), Buffer.from(clientCades.value, 'base64'));
+  execFileSync('openssl', ['cms', '-verify', '-cades', '-binary', '-inform', 'DER', '-in', join(folder, 'client-cades.p7s'), '-CAfile', join(folder, 'client-cert.pem'), '-purpose', 'any', '-out', join(folder, 'client-cades.bin')], { stdio: 'pipe' });
+  assert.deepEqual(readFileSync(join(folder, 'client-cades.bin')), data);
+
+  nextPage = context.waitForEvent('page');
+  await clientPage.evaluate(xml => settle(client.basicsSignXML(NCALayerClient.basicsStoragePKCS12, xml, NCALayerClient.basicsXMLParams, NCALayerClient.basicsSignerTestAny)), egovLogin.request.args.data);
+  popup = await nextPage; await popup.waitForLoadState();
+  await popup.locator('#cancel').click();
+  const clientCancel = await clientResult();
+  assert.equal(clientCancel.cancelled, true, JSON.stringify(clientCancel));
+
+  const pagesBefore = context.pages().length;
+  await clientPage.evaluate(() => settle(client.getKeyInfo('AKKaztokenStore')));
+  assert.match((await clientResult()).error, /^400: /);
+  await clientPage.evaluate(xml => settle(client.basicsSignXML(NCALayerClient.basicsStoragePKCS12, xml, { tsaProfile: {} }, NCALayerClient.basicsSignerTestAny)), egovLogin.request.args.data);
+  assert.match((await clientResult()).error, /^UNSUPPORTED_OR_FAILED: Метка времени/);
+  await clientPage.evaluate(() => settle(client.basicsSignXML(['AKKaztokenStore'], '<a/>', {}, NCALayerClient.basicsSignerTestAny)));
+  assert.match((await clientResult()).error, /PKCS#12/);
+  assert.equal(context.pages().length, pagesBefore, 'unsupported requests must not open an approval window');
+  await clientPage.evaluate(() => settle(client.getActiveTokens()));
+  assert.deepEqual((await clientResult()).value, [], 'the client connection keeps working after errors');
+  await clientPage.close();
+  console.log('PASS: SIGEX ncalayer-js-client 1.6.1: greeting and KAZTOKEN probe, eGov XML, two detached CMS, attached CAdES verified by OpenSSL, cancel, unsupported methods without a window');
+
+  // eGov client code (public bundle 4250-251581e72057e301.js): a new socket per
+  // operation, send in onopen, continue only when body.result is non-empty.
+  const authKey = rsaFixture({ purpose: 'clientAuth' });
+  const egovPage = await context.newPage(); await egovPage.goto('https://egov.kz/tegin-ui-test');
+  nextPage = context.waitForEvent('page');
+  await egovPage.evaluate(signInfo => {
+    window.egovEvents = []; window.egovSigned = [];
+    const edsEventFn = ({ signInfo, onMessageEvent }) => {
+      const socket = new WebSocket('wss://127.0.0.1:13579/');
+      socket.onopen = () => { socket.send(signInfo); };
+      socket.onmessage = event => {
+        if (event.data === 'reload') return;
+        const response = JSON.parse(event.data); window.egovEvents.push(response);
+        if (response.body?.result?.length) onMessageEvent(response);
+      };
+      socket.onclose = event => { if (!event.wasClean) window.egovEvents.push('interrupted'); };
+    };
+    edsEventFn({ signInfo, onMessageEvent: response => window.egovSigned.push(response.body.result[0]) });
+  }, JSON.stringify(egovLogin.request));
+  popup = await nextPage;
+  await popup.locator('#origin').filter({ hasText: 'https://egov.kz' }).waitFor();
+  await popup.locator('#title').filter({ hasText: 'Вход на сайт' }).waitFor();
+  await unlock(popup, authKey);
+  await popup.locator('#status[data-error]').filter({ hasText: 'доверенную цепочку' }).waitFor({ timeout: 15000 });
+  assert.equal(await popup.locator('#approve').isDisabled(), true);
+  assert.deepEqual(await egovPage.evaluate(() => window.egovEvents), []);
+  await popup.locator('#cancel').click();
+  await egovPage.waitForFunction(() => window.egovEvents.length === 1);
+  assert.deepEqual(await egovPage.evaluate(() => [window.egovEvents, window.egovSigned]), [[{ status: true, body: {} }], []]);
+  await egovPage.close();
+  console.log('PASS: exact eGov login request: a certificate outside the NUC chain is refused, cancel leaves the eGov callback untouched');
+
+  // NUC cabinet signature-basics.js: one socket reused between attempts, twelve
+  // published CA certificates as chain, alert(code) on status=false.
+  const nucPage = await context.newPage(); await nucPage.goto('https://nca.pki.gov.kz/tegin-ui-test');
+  await nucPage.evaluate(signInfo => {
+    window.nucEvents = []; window.nucAlerts = []; window.nucSockets = 0; window.nucSignature = null;
+    function connect() {
+      if (connect.webSocket && connect.webSocket.readyState < 2) return Promise.resolve(connect.webSocket);
+      return new Promise((resolve, reject) => {
+        connect.webSocket = new WebSocket('wss://127.0.0.1:13579/'); window.nucSockets++;
+        connect.webSocket.onopen = () => resolve(connect.webSocket);
+        connect.webSocket.onerror = reject;
+      });
+    }
+    window.nucSign = () => connect().then(webSocket => {
+      webSocket.send(JSON.stringify(signInfo));
+      return new Promise(resolve => {
+        webSocket.onmessage = ({ data }) => {
+          const response = JSON.parse(data); window.nucEvents.push(response);
+          if (response.status === true && response.body && Object.hasOwn(response.body, 'result')) window.nucSignature = response.body.result;
+          else if (response.status === false) window.nucAlerts.push(response.code);
+          resolve(response);
+        };
+      });
+    });
+  }, nucCabinet.request);
+  nextPage = context.waitForEvent('page');
+  await nucPage.evaluate(() => { window.nucRun = nucSign(); });
+  popup = await nextPage;
+  await popup.locator('#origin').filter({ hasText: 'https://nca.pki.gov.kz' }).waitFor();
+  await popup.locator('#title').filter({ hasText: 'Подтверждение на сайте НУЦ' }).waitFor();
+  await unlock(popup, authKey);
+  await popup.locator('#status[data-error]').filter({ hasText: 'доверенную цепочку' }).waitFor({ timeout: 15000 });
+  assert.equal(await popup.locator('#approve').isDisabled(), true);
+  await popup.locator('#cancel').click();
+  assert.deepEqual(await nucPage.evaluate(() => window.nucRun), { status: true, body: {} });
+  nextPage = context.waitForEvent('page');
+  await nucPage.evaluate(() => { window.nucRun = nucSign(); });
+  popup = await nextPage; await popup.waitForLoadState();
+  await popup.close();
+  assert.deepEqual(await nucPage.evaluate(() => window.nucRun), { status: true, body: {} });
+  assert.deepEqual(await nucPage.evaluate(() => [window.nucSockets, window.nucSignature, window.nucAlerts]), [1, null, []]);
+  await nucPage.close(); authKey.container.fill(0);
+  console.log('PASS: exact NUC cabinet request: twelve published CAs do not trust a foreign certificate, the reused socket serves a second attempt, cancel and window close reach the page');
+
+  // Responses stay bound to the frame and operation that asked; limits and timeout are explicit.
+  const framePage = await context.newPage(); await framePage.goto(`http://127.0.0.1:${port}/frames`);
+  await framePage.evaluate(() => new Promise(resolve => { const frame = document.createElement('iframe'); frame.src = '/frame'; frame.onload = resolve; document.body.append(frame); }));
+  const child = framePage.frames().find(frame => frame.url().endsWith('/frame'));
+  const openSocket = (target, request) => target.evaluate(request => {
+    window.answers ||= [];
+    const socket = new WebSocket('wss://127.0.0.1:13579/');
+    socket.onopen = () => socket.send(JSON.stringify(request));
+    socket.onmessage = event => window.answers.push(JSON.parse(event.data));
+    socket.onclose = event => window.answers.push({ closed: event.code });
+  }, request);
+  const answers = target => target.evaluate(() => window.answers || []);
+  const frameRequest = text => ({ module: basics.module, method: 'sign', args: { allowedStorages: ['PKCS12'], format: 'xml', data: `<frame-test>${text}</frame-test>`, signingParams: {}, signerParams: { extKeyUsageOids: [], chain: [] } } });
+  nextPage = context.waitForEvent('page');
+  await openSocket(framePage, frameRequest('top'));
+  const topPopup = await nextPage; await topPopup.waitForLoadState();
+  await openSocket(framePage, frameRequest('second top'));
+  await framePage.waitForFunction(() => window.answers?.length === 1);
+  const busy = (await answers(framePage))[0];
+  assert.equal(busy.status, false); assert.match(busy.message, /Уже есть ожидающий запрос/);
+  nextPage = context.waitForEvent('page');
+  await openSocket(child, frameRequest('child'));
+  const childPopup = await nextPage;
+  await childPopup.locator('#preview').filter({ hasText: '<frame-test>child</frame-test>' }).waitFor({ state: 'attached' });
+  await unlock(childPopup, fixture); await childPopup.locator('#certificate:not([hidden])').waitFor({ timeout: 15000 });
+  await childPopup.locator('#approve').click();
+  await child.waitForFunction(() => window.answers?.length === 1);
+  const childAnswer = (await answers(child))[0];
+  assert.equal(childAnswer.status, true); assert.match(childAnswer.body.result[0], /^<frame-test>child<ds:Signature/);
+  assert.equal(verifyXml(childAnswer.body.result[0], fixture.certificate), true);
+  assert.equal((await answers(framePage)).length, 1, 'the top frame must not receive the child frame response');
+  const topClosed = topPopup.waitForEvent('close');
+  await sw.evaluate(async () => {
+    const [key, record] = Object.entries(await chrome.storage.session.get(null)).find(([name]) => name.startsWith('pending:'));
+    await chrome.storage.session.set({ [key]: { ...record, expires: Date.now() - 1 } });
+    await chrome.alarms.create(key, { when: Date.now() + 50 });
+  });
+  await topClosed;
+  await framePage.waitForFunction(() => window.answers.length === 2);
+  assert.deepEqual((await answers(framePage))[1], { status: true, body: {} });
+  assert.equal((await answers(child)).length, 1);
+  await framePage.evaluate(request => {
+    window.doubled = [];
+    const socket = new WebSocket('wss://127.0.0.1:13579/');
+    socket.onopen = () => { socket.send(JSON.stringify(request)); socket.send(JSON.stringify(request)); };
+    socket.onmessage = event => window.doubled.push(JSON.parse(event.data));
+    socket.onclose = event => window.doubled.push({ closed: event.code });
+  }, frameRequest('doubled'));
+  await framePage.waitForFunction(() => window.doubled.length === 1);
+  assert.deepEqual(await framePage.evaluate(() => window.doubled), [{ closed: 1008 }]);
+  await sw.evaluate(() => new Promise(resolve => { const check = async () => Object.keys(await chrome.storage.session.get(null)).some(key => key.startsWith('pending:')) ? setTimeout(check, 100) : resolve(); check(); }));
+  nextPage = context.waitForEvent('page');
+  await openSocket(child, frameRequest('closing tab'));
+  const orphan = await nextPage; await orphan.waitForLoadState();
+  const orphanClosed = orphan.waitForEvent('close');
+  await framePage.close();
+  await orphanClosed;
+  console.log('PASS: frame binding: the child response reaches only the child, one pending request per frame, timeout returns a basics cancel and closes the window, a second send on one socket closes it, closing the tab closes the approval');
+
   // The eGov origin is intercepted by the local test route: no real portal
   // session, account or document is involved.
   const loginPage = await context.newPage(); await loginPage.goto('https://egov.kz/tegin-ui-test');
@@ -597,7 +826,9 @@ try {
 
   const sensitive = previousMessages + await page.evaluate(() => window.bridgeMessages.join(''));
   assert.ok(!sensitive.includes(PASSWORD));
-  assert.ok(network.every(url => url === 'https://egov.kz/tegin-ui-test' || url.startsWith(`http://127.0.0.1:${port}/`) || (liveTsp && url === 'http://tsp.pki.gov.kz/')), network.join('\n'));
+  // ncalayer-js-client probes the KAZTOKEN HTTP API itself; the route aborts that request.
+  const allowed = ['https://egov.kz/tegin-ui-test', 'https://nca.pki.gov.kz/tegin-ui-test', 'https://127.0.0.1:24680/'];
+  assert.ok(network.every(url => allowed.includes(url) || url.startsWith(`http://127.0.0.1:${port}/`) || (liveTsp && url === 'http://tsp.pki.gov.kz/')), network.join('\n'));
   assert.deepEqual(errors, []);
   const stored = await sw.evaluate(async () => ({ local: await chrome.storage.local.get(null), session: await chrome.storage.session.get(null) }));
   assert.deepEqual(stored.local, {});
