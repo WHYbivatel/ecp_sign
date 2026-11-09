@@ -1,0 +1,33 @@
+{
+  "portal": "Tegin ЭДО · вход, рабочий профиль по умолчанию",
+  "origin": null,
+  "source": {
+    "page": null,
+    "script": "frontend/src/shared/services/ncalayer/service.ts, коммит 2961da5",
+    "observed": "2026-11-09",
+    "method": "Сведения владельца: он проверил копию репозитория ЭДО на своём компьютере (/Users/sanzhar/ncabrowser/artifacts/workspaces/doc). Исполнитель этот код не читал, на сервере сборки его нет. allowTestChainCertificates(): VITE_ALLOW_TEST_CHAIN=true включает тестовые цепочки, false отключает, без настройки берётся DEV. В production-сборке по умолчанию DEV=false, поэтому signerParams.chain не передаётся. Вход выполняется без TSA."
+  },
+  "configuration": "production по умолчанию: VITE_ALLOW_TEST_CHAIN не задан, DEV=false; поля chain и tsaProfile отсутствуют",
+  "deployment": "Соответствие развёрнутой версии ЭДО коммиту 2961da5 не установлено.",
+  "anonymized": "Синтетический challenge.",
+  "request": {
+    "module": "kz.gov.pki.knca.basics",
+    "method": "sign",
+    "args": {
+      "allowedStorages": null,
+      "format": "cms",
+      "data": "dGVnaW4tYXV0aC1jaGFsbGVuZ2UtcHJvZHVjdGlvbi1kZWZhdWx0",
+      "signingParams": {
+        "decode": true,
+        "encapsulate": true,
+        "digested": false
+      },
+      "signerParams": {
+        "extKeyUsageOids": [
+          "1.3.6.1.5.5.7.3.2"
+        ]
+      },
+      "locale": "ru"
+    }
+  }
+}

@@ -6,6 +6,7 @@ import { resolve, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { rsaFixture, gostFixture, PASSWORD } from './helpers/fixtures.js';
+import { syntheticTsa } from './helpers/tsa.js';
 import { verifyCms } from '../extension/crypto/cms-verify.js';
 import { forge, oid, der } from '../extension/crypto/encoding.js';
 import { SignedXml } from 'xml-crypto';
@@ -30,18 +31,22 @@ const fallback = existsSync(cache) ? readdirSync(cache).filter(name => /^chromiu
   .map(name => join(cache, name, 'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing')).find(existsSync) : undefined;
 const executablePath = process.env.CHROMIUM_EXECUTABLE || (existsSync(chromium.executablePath()) ? chromium.executablePath() : fallback);
 let context;
+const liveTsp = process.env.NCA_LIVE_TSP === '1';
+const TSA = 'http://tsp.pki.gov.kz/';
 try {
   context = await chromium.launchPersistentContext(join(folder, 'profile'), {
     executablePath, headless: true, viewport: { width: 620, height: 790 },
-    args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`, '--no-first-run']
+    // Without NCA_LIVE_TSP the real TSA name never resolves, even if a request escaped the route.
+    args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`, '--no-first-run', ...(liveTsp ? [] : ['--host-resolver-rules=MAP tsp.pki.gov.kz ~NOTFOUND'])]
   });
   const errors = [];
-  const liveTsp = process.env.NCA_LIVE_TSP === '1';
   const network = [];
+  let tsaStub = null, tsaRequests = 0, tsaStubbed = 0;
   context.on('page', page => page.on('pageerror', error => errors.push(error.message)));
   context.on('request', request => { if (/^https?:/.test(request.url())) network.push(request.url()); });
   await context.route('**/*', route => {
     const url = route.request().url();
+    if (url === TSA) { tsaRequests++; if (tsaStub) { tsaStubbed++; return tsaStub(route); } }
     if (url === 'https://egov.kz/tegin-ui-test' || url === 'https://nca.pki.gov.kz/tegin-ui-test') return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><title>Tegin local UI fixture</title><h1>Artificial authentication request</h1>' });
     if (url.startsWith(`http://127.0.0.1:${port}/`) || url.startsWith('chrome-extension:') || (liveTsp && url === 'http://tsp.pki.gov.kz/')) route.continue();
     else route.abort();
@@ -244,8 +249,9 @@ try {
   await page.evaluate(() => window.portalSocket.close());
   console.log('PASS: NUC-style null TSA + twelve roots + legacy root + authentication EKU, direct onopen client receives signed XML');
 
-  // Exact Tegin NCALayerService wire profiles: UTF-8/base64 challenge attached,
-  // then downloaded document bytes detached. No Tegin API payload includes key/password.
+  // Tegin NCALayerService profiles in the test-chain configuration with TSA disabled
+  // (chain: [], no tsaProfile): UTF-8/base64 challenge attached, then downloaded
+  // document bytes detached. Production defaults are exercised further below.
   const challenge = 'tegin-auth-challenge-v1-123456';
   const authCmsRequest = { module: basics.module, method: 'sign', args: { allowedStorages: null, format: 'cms',
     data: Buffer.from(challenge, 'utf8').toString('base64'),
@@ -258,7 +264,7 @@ try {
   const authCms = new Uint8Array(Buffer.from(authWireAnswer.body.result[0], 'base64'));
   const verifiedAuth = await verifyCms(authCms);
   assert.deepEqual(Buffer.from(verifiedAuth.content), Buffer.from(challenge, 'utf8'));
-  console.log('PASS: Tegin authChallenge bytes encoded by frontend profile are returned as attached CMS and verified independently');
+  console.log('PASS: Tegin authChallenge (test-chain configuration, no TSA) bytes are returned as attached CMS and verified independently');
 
   const documentBytes = Buffer.from('%PDF-1.4\nTegin synthetic document-sign fixture\n');
   const documentWireRequest = { module: basics.module, method: 'sign', args: { allowedStorages: null, format: 'cms',
@@ -273,7 +279,7 @@ try {
   assert.equal((await verifyCms(documentCms, { detached: new Uint8Array(documentBytes) })).valid, true);
   const changedTeginPdf = new Uint8Array(documentBytes); changedTeginPdf[0] ^= 1;
   await assert.rejects(verifyCms(documentCms, { detached: changedTeginPdf }));
-  console.log('PASS: Tegin downloaded-document profile returns detached CMS; exact bytes pass, changed bytes fail');
+  console.log('PASS: Tegin document profile (test-chain configuration, TSA disabled) returns detached CMS; exact bytes pass, changed bytes fail');
 
   popup = await portalOnOpen(nucRequest);
   await popup.locator('#key-file').setInputFiles({ name: 'signing-only-test.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(signingOnly.container) });
@@ -567,6 +573,74 @@ try {
     return verifier.checkSignature(xml);
   };
 
+  // Tegin EDO profiles of commit 2961da5 as reported by the repository owner (the
+  // code is not available here). Production defaults send no chain, so only the
+  // bundled NUC roots apply; the document profile also requires a NUC timestamp.
+  const teginLogin = portal('tegin-edo-login'), teginDocument = portal('tegin-edo-document-sign'), teginTestChain = portal('tegin-edo-test-chain');
+  const edoAuthKey = rsaFixture({ purpose: 'clientAuth' }), edoSignKey = rsaFixture({ purpose: 'emailProtection' });
+  const siteWaiting = () => page.evaluate(() => Promise.race([window.result.then(() => 'answered'), new Promise(resolve => setTimeout(() => resolve('pending'), 300))]));
+  const tsaBefore = tsaRequests;
+  let edoWindow;
+  for (const [profile, key] of [[teginLogin, edoAuthKey], [teginDocument, edoSignKey]]) {
+    edoWindow = context.waitForEvent('page');
+    await send(profile.request);
+    popup = await edoWindow;
+    await popup.locator('#origin').filter({ hasText: `http://127.0.0.1:${port}` }).waitFor();
+    assert.equal(await popup.locator('#timestamp-note').isVisible(), profile === teginDocument, `${profile.portal}: timestamp note`);
+    await unlock(popup, key);
+    await popup.locator('#status[data-error]').filter({ hasText: 'доверенную цепочку' }).waitFor({ timeout: 15000 });
+    assert.equal(await popup.locator('#approve').isDisabled(), true);
+    assert.equal(await siteWaiting(), 'pending', `${profile.portal}: the site receives nothing while the certificate is refused`);
+    await popup.locator('#cancel').click();
+    assert.deepEqual(await result(), { status: true, body: {} });
+  }
+  assert.equal(tsaRequests, tsaBefore, 'a refused certificate never reaches the TSA');
+  console.log('PASS: Tegin EDO production login and document profiles (2961da5, owner-reported; no chain) refuse a certificate outside the NUC chain before any TSA request');
+
+  // Test-chain configuration with the default TSA (chain: [], tsaProfile: {}): the
+  // signature is computed, but every TSA failure must keep it from the site.
+  const localTsa = syntheticTsa();
+  const reply = body => ({ status: 200, contentType: 'application/timestamp-reply', body });
+  const tsaFailures = [
+    ['unreachable TSA', route => route.abort('connectionrefused'), /недоступна/],
+    ['HTML instead of a timestamp reply', route => route.fulfill({ status: 200, contentType: 'text/html', body: '<html></html>' }), /неожиданный ответ/],
+    ['malformed timestamp reply', route => route.fulfill(reply(Buffer.from([0x30, 0x82, 0xff, 0xff, 0x01]))), /./],
+    ['rejection status', route => route.fulfill(reply(Buffer.from([0x30, 0x05, 0x30, 0x03, 0x02, 0x01, 0x02]))), /не выдал/],
+    ['well-formed reply from a TSA outside the NUC chain', route => route.fulfill(reply(Buffer.from(localTsa.reply(route.request().postDataBuffer())))), /службы меток времени не прошёл проверку/]
+  ];
+  edoWindow = context.waitForEvent('page');
+  await send(teginTestChain.requests.documentSignTsa);
+  popup = await edoWindow;
+  await popup.locator('#origin').filter({ hasText: `http://127.0.0.1:${port}` }).waitFor();
+  assert.equal(await popup.locator('#timestamp-note').isVisible(), true);
+  for (const [name, handler, message] of tsaFailures) {
+    tsaStub = handler;
+    await unlock(popup, edoSignKey);
+    await popup.locator('#certificate:not([hidden])').waitFor({ timeout: 15000 });
+    const before = tsaStubbed;
+    await popup.locator('#approve').click();
+    await popup.locator('#status[data-error]').waitFor({ timeout: 30000 });
+    assert.match(await popup.locator('#status').innerText(), message, name);
+    assert.equal(tsaStubbed, before + 1, `${name}: exactly one TSA request`);
+    assert.equal(await siteWaiting(), 'pending', `${name}: no unstamped signature reaches the site`);
+  }
+  tsaStub = null;
+  await popup.locator('#cancel').click();
+  assert.deepEqual(await result(), { status: true, body: {} });
+  localTsa.destroy();
+  if (liveTsp) {
+    // Explicit only (NCA_LIVE_TSP=1): disposable key and synthetic document.
+    popup = await confirmation(teginTestChain.requests.documentSignTsa, edoSignKey);
+    await popup.locator('#approve').click(); answer = await result();
+    assert.equal(answer.status, true, answer.message);
+    const stampedEdo = await verifyCms(new Uint8Array(Buffer.from(answer.body.result[0], 'base64')), { detached: new Uint8Array(Buffer.from(teginTestChain.requests.documentSignTsa.args.data, 'base64')) });
+    assert.equal(stampedEdo.valid, true);
+    assert.ok(stampedEdo.signers[0].info.value.some(node => node.tagClass === 128 && node.type === 1));
+    console.log('PASS: live NUC TSA: Tegin EDO test-chain document profile returns a detached CAdES-T');
+  }
+  edoAuthKey.container.fill(0); edoSignKey.container.fill(0);
+  console.log('PASS: Tegin EDO document profile with tsaProfile {}: unreachable, HTML, malformed, rejected and non-NUC TSA replies keep the unstamped signature from the site');
+
   // SIGEX ncalayer-js-client 1.6.1: waits for the greeting, probes KAZTOKEN, then uses basics and commonUtils.
   const clientPage = await context.newPage();
   await clientPage.goto(`http://127.0.0.1:${port}/sigex-client`);
@@ -839,7 +913,8 @@ try {
   assert.ok(!sensitive.includes(PASSWORD));
   // ncalayer-js-client probes the KAZTOKEN HTTP API itself; the route aborts that request.
   const allowed = ['https://egov.kz/tegin-ui-test', 'https://nca.pki.gov.kz/tegin-ui-test', 'https://127.0.0.1:24680/'];
-  assert.ok(network.every(url => allowed.includes(url) || url.startsWith(`http://127.0.0.1:${port}/`) || (liveTsp && url === 'http://tsp.pki.gov.kz/')), network.join('\n'));
+  assert.ok(network.every(url => allowed.includes(url) || url.startsWith(`http://127.0.0.1:${port}/`) || (url === TSA && (liveTsp || tsaStubbed > 0))), network.join('\n'));
+  if (!liveTsp) assert.equal(tsaRequests, tsaStubbed, 'every TSA request outside NCA_LIVE_TSP was served by a local stub');
   assert.deepEqual(errors, []);
   const stored = await sw.evaluate(async () => ({ local: await chrome.storage.local.get(null), session: await chrome.storage.session.get(null) }));
   assert.deepEqual(stored.local, {});

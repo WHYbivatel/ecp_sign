@@ -1,0 +1,84 @@
+{
+  "portal": "Tegin ЭДО · конфигурации с тестовой цепочкой",
+  "origin": null,
+  "source": {
+    "page": null,
+    "script": "frontend/src/shared/services/ncalayer/service.ts, коммит 2961da5",
+    "observed": "2026-11-09",
+    "method": "Профили authChallenge и documentSign перенесены из E2E-фикстуры коммита 91b4ebe. По сведениям владельца о коммите 2961da5 (исполнитель код не читал), chain: [] передаётся только при включённых тестовых цепочках: VITE_ALLOW_TEST_CHAIN=true или DEV без этой настройки. Это не production-профиль по умолчанию, см. tegin-edo-login.json и tegin-edo-document-sign.json."
+  },
+  "configuration": "Тестовая цепочка: VITE_ALLOW_TEST_CHAIN=true либо DEV без настройки; signerParams.chain: []",
+  "variants": {
+    "authChallenge": "Вход: тестовая цепочка, без TSA (вход TSA не запрашивает)",
+    "documentSign": "Подпись документа: тестовая цепочка, TSA отключена (VITE_CMS_TSP='false')",
+    "documentSignTsa": "Подпись документа: тестовая цепочка, TSA по умолчанию (VITE_CMS_TSP не равно 'false', tsaProfile: {})"
+  },
+  "deployment": "Соответствие развёрнутой версии ЭДО коммиту 2961da5 не установлено.",
+  "anonymized": "Синтетический challenge и синтетический PDF-подобный документ.",
+  "requests": {
+    "authChallenge": {
+      "module": "kz.gov.pki.knca.basics",
+      "method": "sign",
+      "args": {
+        "allowedStorages": null,
+        "format": "cms",
+        "data": "dGVnaW4tYXV0aC1jaGFsbGVuZ2UtdjEtMTIzNDU2",
+        "signingParams": {
+          "decode": true,
+          "encapsulate": true,
+          "digested": false
+        },
+        "signerParams": {
+          "extKeyUsageOids": [
+            "1.3.6.1.5.5.7.3.2"
+          ],
+          "chain": []
+        },
+        "locale": "ru"
+      }
+    },
+    "documentSign": {
+      "module": "kz.gov.pki.knca.basics",
+      "method": "sign",
+      "args": {
+        "allowedStorages": null,
+        "format": "cms",
+        "data": "JVBERi0xLjQKVGVnaW4gc3ludGhldGljIGRvY3VtZW50LXNpZ24gZml4dHVyZQo=",
+        "signingParams": {
+          "decode": true,
+          "encapsulate": false,
+          "digested": false
+        },
+        "signerParams": {
+          "extKeyUsageOids": [
+            "1.3.6.1.5.5.7.3.4"
+          ],
+          "chain": []
+        },
+        "locale": "ru"
+      }
+    },
+    "documentSignTsa": {
+      "module": "kz.gov.pki.knca.basics",
+      "method": "sign",
+      "args": {
+        "allowedStorages": null,
+        "format": "cms",
+        "data": "JVBERi0xLjQKVGVnaW4gc3ludGhldGljIGRvY3VtZW50LXNpZ24gZml4dHVyZQo=",
+        "signingParams": {
+          "decode": true,
+          "encapsulate": false,
+          "digested": false,
+          "tsaProfile": {}
+        },
+        "signerParams": {
+          "extKeyUsageOids": [
+            "1.3.6.1.5.5.7.3.4"
+          ],
+          "chain": []
+        },
+        "locale": "ru"
+      }
+    }
+  }
+}
