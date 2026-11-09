@@ -38,7 +38,7 @@ function lock() {
   $('#show-password').setAttribute('aria-pressed', 'false');
   $('#show-password').setAttribute('aria-label', 'Показать пароль');
   $('#certificate').hidden = true;
-  $('#key-diagnostic').hidden = true; $('#key-diagnostic').open = false; $('#key-diagnostic-data').textContent = '';
+  $('#key-diagnostic').hidden = true; $('#key-diagnostic').open = false; $('#key-diagnostic-data').textContent = ''; $('#copy-diagnostic').textContent = 'Скопировать';
   $('#key-form').hidden = verifyMode;
   $('#step').textContent = verifyMode ? 'Без ключа' : '01 / 02';
   updateControls();

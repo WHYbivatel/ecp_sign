@@ -152,6 +152,52 @@ try {
   assert.throws(() => execFileSync('openssl', ['cms', '-verify', '-binary', '-inform', 'DER', '-in', join(folder, 'unicode-tampered.p7s'), '-CAfile', join(folder, 'unicode-cert.pem'), '-purpose', 'any', '-out', join(folder, 'unicode-tampered-out')], { stdio: 'pipe' }));
   console.log('PASS: PBES2 PKCS12 with a Kazakh/Cyrillic password: precise error, anonymous diagnostic, stale-worker guard, retry, OpenSSL-verified CMS, tampered document rejected');
 
+  // A certificate-stage error replaces the key form with the certificate card; the diagnostic must stay reachable.
+  const day = 24 * 60 * 60 * 1000;
+  const expiredKey = rsaFixture({ subject: '/CN=Tegin expired disposable test', validity: { notBefore: new Date(Date.now() - 30 * day), notAfter: new Date(Date.now() - day) } });
+  // Chromium cannot grant clipboard access to the extension origin, so the copied text is read back from the fixture page.
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: `http://127.0.0.1:${port}` });
+  const expiredOpened = context.waitForEvent('page');
+  await send(common);
+  popup = await expiredOpened;
+  await popup.locator('#origin').filter({ hasText: `http://127.0.0.1:${port}` }).waitFor();
+  await popup.locator('#key-file').setInputFiles({ name: 'expired-test-key.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(expiredKey.container) });
+  await popup.locator('#password').fill(PASSWORD);
+  await popup.locator('#unlock').click();
+  await popup.locator('#status[data-error]').filter({ hasText: 'Срок действия сертификата ещё не наступил или уже истёк.' }).waitFor({ timeout: 15000 });
+  assert.equal(await popup.locator('#certificate[data-diagnostic]').isVisible(), true);
+  assert.equal(await popup.locator('#key-form').isHidden(), true);
+  assert.equal(await popup.locator('#key-diagnostic').isVisible(), true, 'diagnostic must be visible next to the certificate card');
+  assert.equal(await popup.locator('#approve').isDisabled(), true);
+  assert.equal(await popup.locator('#password').inputValue(), '');
+  await popup.locator('#key-diagnostic summary').click();
+  assert.equal(await popup.locator('#key-diagnostic-data').isVisible(), true);
+  await popup.setViewportSize({ width: 870, height: 850 });
+  await popup.screenshot({ path: resolve('artifacts/certificate-error-diagnostic.png'), fullPage: true });
+  const expiredText = await popup.locator('#key-diagnostic-data').textContent();
+  const expiredDiagnostic = JSON.parse(expiredText);
+  assert.equal(expiredDiagnostic.code, 'CERTIFICATE_NOT_VALID_NOW'); assert.equal(expiredDiagnostic.stage, 'certificate');
+  assert.equal(expiredDiagnostic.product, 'Tegin');
+  for (const secret of ['expired-test-key', 'Tegin expired disposable test', PASSWORD, expiredKey.certificate.split('\n')[1].slice(0, 32)]) assert.ok(!expiredText.includes(secret), `diagnostic leaks ${secret}`);
+  await popup.bringToFront();
+  await popup.locator('#copy-diagnostic').click();
+  await popup.locator('#copy-diagnostic').filter({ hasText: 'Скопировано' }).waitFor();
+  await page.bringToFront();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), expiredText);
+  await page.evaluate(() => navigator.clipboard.writeText(''));
+  await popup.bringToFront();
+  assert.equal(await popup.locator('#approve').isDisabled(), true);
+  await popup.locator('#change-key').click();
+  assert.equal(await popup.locator('#key-diagnostic').isHidden(), true);
+  assert.equal(await popup.locator('#key-diagnostic-data').textContent(), '');
+  assert.equal(await popup.locator('#key-form').isVisible(), true);
+  assert.equal(await popup.locator('#approve').isDisabled(), true);
+  await popup.locator('#cancel').click();
+  answer = await result();
+  assert.equal(answer.code, '500'); assert.equal(answer.responseObject, null);
+  expiredKey.container.fill(0);
+  console.log('PASS: expired disposable certificate: error shown, diagnostic visible beside the certificate card, CERTIFICATE_NOT_VALID_NOW/certificate, copy works, approval disabled, cleared on key change');
+
   const basics = { module: 'kz.gov.pki.knca.basics', method: 'sign', args: { allowedStorages: ['PKCS12'], format: 'xml', data: '<request><text>Тест браузера</text></request>', signingParams: {}, signerParams: { extKeyUsageOids: [], chain: [] } } };
   popup = await confirmation(basics);
   await popup.locator('#approve').click();

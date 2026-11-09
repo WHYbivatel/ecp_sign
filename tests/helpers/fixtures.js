@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -19,14 +19,22 @@ export const OPENSSL_PROFILES = {
 // Passwords travel to OpenSSL through the environment to keep spaces and Unicode exact.
 export const opensslPassword = password => ({ stdio: 'pipe', env: { ...process.env, TEGIN_TEST_P12_PASSWORD: password } });
 
-export function rsaFixture({ purpose, password = PASSWORD, profile = 'default', subject = '/CN=Tegin disposable test', keySpec = 'rsa:2048' } = {}) {
+export function rsaFixture({ purpose, password = PASSWORD, profile = 'default', subject = '/CN=Tegin disposable test', keySpec = 'rsa:2048', validity } = {}) {
   if (purpose && !['clientAuth', 'emailProtection'].includes(purpose)) throw new Error('Unsupported fixture purpose');
   if (!OPENSSL_PROFILES[profile]) throw new Error('Unsupported fixture profile');
+  if (validity && keySpec.startsWith('ec:')) throw new Error('Custom validity is supported for RSA fixtures only');
   const folder = mkdtempSync(join(tmpdir(), 'ncabrowser-rsa-'));
   try {
     const keyArgs = keySpec.startsWith('ec:') ? ['-newkey', 'ec', '-pkeyopt', `ec_paramgen_curve:${keySpec.slice(3)}`] : ['-newkey', keySpec];
     execFileSync('openssl', ['req', '-x509', ...keyArgs, '-nodes', '-keyout', join(folder, 'key.pem'), '-utf8',
       '-out', join(folder, 'cert.pem'), '-days', '2', '-subj', subject, ...(purpose ? ['-addext', 'extendedKeyUsage=' + purpose] : [])], { stdio: 'ignore' });
+    // OpenSSL 3.0 cannot backdate `req -x509`; re-sign the same self-signed certificate with the requested dates.
+    if (validity) {
+      const certificate = forge.pki.certificateFromPem(readFileSync(join(folder, 'cert.pem'), 'utf8'));
+      certificate.validity.notBefore = validity.notBefore; certificate.validity.notAfter = validity.notAfter;
+      certificate.sign(forge.pki.privateKeyFromPem(readFileSync(join(folder, 'key.pem'), 'utf8')), forge.md.sha256.create());
+      writeFileSync(join(folder, 'cert.pem'), forge.pki.certificateToPem(certificate));
+    }
     execFileSync('openssl', ['pkcs12', '-export', ...OPENSSL_PROFILES[profile], '-inkey', join(folder, 'key.pem'), '-in', join(folder, 'cert.pem'),
       '-out', join(folder, 'key.p12'), '-passout', 'env:TEGIN_TEST_P12_PASSWORD'], opensslPassword(password));
     return { container: new Uint8Array(readFileSync(join(folder, 'key.p12'))),
