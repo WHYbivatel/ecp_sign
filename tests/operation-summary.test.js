@@ -1,6 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { serviceOperation } from '../extension/lib/operation-summary.js';
+import { serviceOperation, keyInfoResult } from '../extension/lib/operation-summary.js';
+import { certificateInfo } from '../extension/crypto/signer.js';
+import { unbase64 } from '../extension/crypto/encoding.js';
+import { gostFixture } from './helpers/fixtures.js';
+
+test('certificate information for a site carries the public certificate fields only', () => {
+  const fixture = gostFixture('512', { eku: ['1.3.6.1.5.5.7.3.4'] });
+  const summary = certificateInfo(unbase64(fixture.certificate)).summary;
+  const selected = { ...summary, unifiedNca: false, fingerprint: 'ab'.repeat(32), trust: { trusted: true, scope: 'nca', ncaTrusted: true, reason: 'Цепочка доверия проверена локально.',
+    path: [{ name: 'NCA', fingerprint: 'cd'.repeat(32) }], revocation: { state: 'good', required: true, checkedAt: '2026-11-09T10:00:00.000Z', expires: '2026-11-09T11:00:00.000Z',
+      certificates: [{ state: 'good', source: 'crl', reason: 'ocsp-unavailable' }] } } };
+  const result = keyInfoResult(selected);
+  assert.deepEqual(Object.keys(result).sort(), ['algorithm', 'bin', 'cert', 'certificate', 'extendedKeyUsageOids', 'iin', 'issuer', 'issuerDn', 'name', 'notAfter', 'notBefore', 'organization', 'serialNumber', 'subjectDn']);
+  assert.equal(result.cert, fixture.certificate);
+  assert.equal(result.certificate, fixture.certificate);
+  assert.equal(result.subjectDn, summary.subjectDn);
+  assert.deepEqual(result.extendedKeyUsageOids, ['1.3.6.1.5.5.7.3.4']);
+  assert.notEqual(result.extendedKeyUsageOids, selected.extendedKeyUsageOids);
+  for (const leaked of ['ocsp-unavailable', 'checkedAt', 'trust', 'fingerprint', 'unifiedNca']) assert.ok(!JSON.stringify(result).includes(leaked), leaked);
+});
 const auth = { operation: 'sign', format: 'xml', documents: ['<login><client-type>PORTAL</client-type></login>'], signerParams: { extKeyUsageOids: ['1.3.6.1.5.5.7.3.2'] } };
 test('only complete known service requests can replace the default XML preview', () => {
   assert.equal(serviceOperation(auth, 'https://egov.kz').title, 'Вход на сайт');

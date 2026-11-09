@@ -1,3 +1,11 @@
+// The confirmation window promises the public certificate only: local trust and revocation
+// results (check times, sources, fallbacks) stay in the extension.
+const KEY_INFO_FIELDS = ['name', 'iin', 'bin', 'organization', 'issuer', 'subjectDn', 'issuerDn', 'notBefore', 'notAfter', 'serialNumber', 'algorithm', 'extendedKeyUsageOids', 'certificate'];
+export function keyInfoResult(certificate) {
+  const result = Object.fromEntries(KEY_INFO_FIELDS.map(field => [field, certificate[field]]));
+  return { ...result, extendedKeyUsageOids: [...certificate.extendedKeyUsageOids], cert: certificate.certificate };
+}
+
 // Recognize only complete, known service payloads on their exact origins.
 // Other XML, extra fields, unknown origins and document hashes keep their preview.
 export function serviceOperation(request, origin) {

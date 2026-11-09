@@ -1,4 +1,4 @@
-import { serviceOperation } from '../lib/operation-summary.js';
+import { serviceOperation, keyInfoResult } from '../lib/operation-summary.js';
 import { base64, unbase64, bytes as binaryBytes } from '../lib/bytes.js';
 
 const $ = selector => document.querySelector(selector);
@@ -336,8 +336,7 @@ $('#approve').addEventListener('click', async () => {
     if (id) await message('nca:validate');
     if (request.operation === 'info') {
       const certificate = selectedCertificate;
-      await message('nca:complete', { result: { ...certificate, cert: certificate.certificate,
-        subjectDn: certificate.subjectDn, issuerDn: certificate.issuerDn } });
+      await message('nca:complete', { result: keyInfoResult(certificate) });
       resultScreen({ title: 'Сведения переданы', description: 'Сайт получил публичный сертификат.', details: certificate.name });
       setTimeout(() => window.close(), 1000); return;
     }
