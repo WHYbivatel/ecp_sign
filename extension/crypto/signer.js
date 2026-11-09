@@ -111,6 +111,8 @@ export function certificateInfo(raw) {
 }
 
 const MAX_ITERATIONS = 1000000;
+// A key safe and a certificate safe at the per-step limit, tried with each of the three PBES2 password encodings.
+const MAX_KDF_WORK = 6 * MAX_ITERATIONS;
 const PBES2 = '1.2.840.113549.1.5.13', PBKDF2 = '1.2.840.113549.1.5.12';
 const PKCS12_PBE = new Set(['1.2.840.113549.1.12.1.3', '1.2.840.113549.1.12.1.6']);
 const PBES2_CIPHERS = new Set(['2.16.840.1.101.3.4.1.2', '2.16.840.1.101.3.4.1.22', '2.16.840.1.101.3.4.1.42', '1.2.840.113549.3.7', '1.3.14.3.2.7']);
@@ -147,9 +149,8 @@ function validateIterations(value) {
 // Diagnostics carry only algorithm OIDs and bounded counters: no names, IIN, file names, DER or key bytes.
 const safeOid = value => typeof value === 'string' && /^\d{1,9}(\.\d{1,9}){1,24}$/.test(value) ? value : undefined;
 const safeCount = value => Number.isSafeInteger(value) && value >= 0 ? Math.min(value, MAX_ITERATIONS + 1) : undefined;
-function describeEncryption(algorithm) {
-  const scheme = oidValue(algorithm.value[0]);
-  const params = algorithm.value[1];
+function describeEncryption(algorithm) { return describeParameters(oidValue(algorithm.value[0]), algorithm.value[1]); }
+function describeParameters(scheme, params) {
   if (scheme === PBES2) {
     const [kdf, cipher] = params.value;
     const kdfParams = kdf.value[1].value;
@@ -214,15 +215,25 @@ function decryptSafeContents(pfx, password) {
   // against its certificate.
   const encodings = [forge.util.encodeUtf8(password)];
   if (/[^\x00-\x7f]/.test(password)) encodings.push(password.replace(/[^]/g, char => String.fromCharCode(char.charCodeAt(0) & 255)), password);
-  const pbe = forge.pki.pbe, pbes2 = pbe.getCipherForPBES2;
+  const pbe = forge.pki.pbe, pbes2 = pbe.getCipherForPBES2, pkcs12Pbe = pbe.getCipherForPKCS12PBE;
   const authenticated = A.create(A.Class.UNIVERSAL, A.Type.SEQUENCE, true, pfx.value.slice(0, 2));
-  let failure;
+  // Key bags inside EncryptedData are only visible after decryption, so every parameter
+  // set forge asks a cipher for is held to the same algorithms and limits, and the total
+  // derivation work of one open is bounded.
+  let work = 0, failure;
+  const guarded = cipher => (scheme, params, secret) => {
+    const entry = describeParameters(scheme, params);
+    if (!supportedEncryption(entry)) throw new ContainerError(undefined, 'UNSUPPORTED_ENCRYPTION_ALGORITHM');
+    if (entry.iterations < 1 || entry.iterations > MAX_ITERATIONS || (work += entry.iterations) > MAX_KDF_WORK) throw new ContainerError('Число итераций защиты контейнера не поддерживается.', 'CONTAINER_LIMITS', 'decryption');
+    return cipher(scheme, params, secret);
+  };
   for (const encoded of encodings) {
-    pbe.getCipherForPBES2 = (oid, params) => pbes2(oid, params, encoded);
+    pbe.getCipherForPBES2 = guarded((oid, params) => pbes2(oid, params, encoded));
+    pbe.getCipherForPKCS12PBE = guarded(pkcs12Pbe);
     // MAC is verified by verifyMac; forge only decrypts the authenticated contents.
     try { return forge.pkcs12.pkcs12FromAsn1(authenticated, true, password); }
-    catch (error) { failure = error; if (error?.oid) break; }
-    finally { pbe.getCipherForPBES2 = pbes2; }
+    catch (error) { if (error instanceof ContainerError) throw error; failure = error; if (error?.oid) break; }
+    finally { pbe.getCipherForPBES2 = pbes2; pbe.getCipherForPKCS12PBE = pkcs12Pbe; }
   }
   throw new ContainerError(undefined, failure?.oid ? 'UNSUPPORTED_ENCRYPTION_ALGORITHM' : 'DECRYPTION_FAILED');
 }

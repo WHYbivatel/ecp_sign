@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { rsaFixture, gostFixture, pkcs12Container, shroudedKeyBag, certificateBag, integerBytes, opensslPassword, PASSWORD } from './helpers/fixtures.js';
+import { rsaFixture, gostFixture, pkcs12Container, pkcs12FromContents, encryptedSafe, shroudedKeyBag, certificateBag, integerBytes, opensslPassword, PASSWORD } from './helpers/fixtures.js';
 import { openContainer, GostSign } from '../extension/crypto/signer.js';
 import { CONTAINER_FAILURES } from '../extension/lib/pkcs12.js';
 import { forge, A, parse, der, bytes, binary, oid } from '../extension/crypto/encoding.js';
@@ -151,6 +151,58 @@ test('excessive or zero iteration counts are rejected before key derivation', as
     kdfParams.value[1].value = integerBytes(2000000);
   });
   await rejectsWith(openContainer(pbkdf2, PASSWORD), 'CONTAINER_LIMITS', 'limits');
+});
+
+test('key bags inside EncryptedData are held to the same algorithms and iteration limits (regression)', async () => {
+  const fixture = rsaFixture({ password: PASSWORD });
+  const privateKey = forge.pki.wrapRsaPrivateKey(forge.pki.privateKeyToAsn1(forge.pki.privateKeyFromPem(fixture.publicKey)));
+  const certificate = der(forge.pki.certificateToAsn1(forge.pki.certificateFromPem(fixture.certificate)));
+  const nested = encrypted => pkcs12FromContents([encryptedSafe([shroudedKeyBag(encrypted), certificateBag(certificate)])]);
+  const pbe = () => forge.pki.encryptPrivateKeyInfo(privateKey, PASSWORD, { algorithm: '3des', count: 2048 });
+  const pbes2 = () => forge.pki.encryptPrivateKeyInfo(privateKey, PASSWORD, { algorithm: 'aes256', prfAlgorithm: 'sha256', count: 2048 });
+  const signer = await openContainer(nested(pbe()), PASSWORD);
+  assert.ok(verify('sha256', data, createPublicKey(fixture.certificate), await signer.sign(data)));
+  signer.destroy();
+  const hooks = [forge.pki.pbe.getCipherForPBES2, forge.pki.pbe.getCipherForPKCS12PBE];
+  for (const count of [0, 1000001, 2 ** 31 - 1]) {
+    const key = pbe(); key.value[0].value[1].value[1].value = integerBytes(count);
+    const started = Date.now();
+    await rejectsWith(openContainer(nested(key), PASSWORD), 'CONTAINER_LIMITS', 'decryption');
+    const derived = pbes2(); derived.value[0].value[1].value[0].value[1].value[1].value = integerBytes(count);
+    await rejectsWith(openContainer(nested(derived), PASSWORD), 'CONTAINER_LIMITS', 'decryption');
+    assert.ok(Date.now() - started < 5000, 'limits apply before key derivation');
+  }
+  const sha224 = pbes2(); sha224.value[0].value[1].value[0].value[1].value.find(node => node.type === A.Type.SEQUENCE).value[0] = oid('1.2.840.113549.2.8');
+  await rejectsWith(openContainer(nested(sha224), PASSWORD), 'UNSUPPORTED_ENCRYPTION_ALGORITHM', 'decryption');
+  const safe = encryptedSafe([certificateBag(certificate)]);
+  safe.value[1].value[0].value[1].value[1].value[1].value[1].value = integerBytes(0);
+  await rejectsWith(openContainer(pkcs12FromContents([safe]), PASSWORD), 'CONTAINER_LIMITS', 'limits');
+  assert.deepEqual([forge.pki.pbe.getCipherForPBES2, forge.pki.pbe.getCipherForPKCS12PBE], hooks);
+});
+
+test('the total key-derivation work of one open is bounded', async () => {
+  const fixture = rsaFixture({ password: PASSWORD });
+  const privateKey = forge.pki.wrapRsaPrivateKey(forge.pki.privateKeyToAsn1(forge.pki.privateKeyFromPem(fixture.publicKey)));
+  const certificate = der(forge.pki.certificateToAsn1(forge.pki.certificateFromPem(fixture.certificate)));
+  // Bags declare the per-step maximum but are encrypted with 2048 iterations; the hook below
+  // derives with 2048 so the test stays fast while Tegin accounts the declared count.
+  const encrypted = forge.pki.encryptPrivateKeyInfo(privateKey, PASSWORD, { algorithm: '3des', count: 2048 });
+  encrypted.value[0].value[1].value[1].value = integerBytes(1000000);
+  const key = shroudedKeyBag(encrypted);
+  const original = forge.pki.pbe.getCipherForPKCS12PBE;
+  const derived = [];
+  const stub = (scheme, params, password) => {
+    derived.push(scheme);
+    return original(scheme, A.create(A.Class.UNIVERSAL, A.Type.SEQUENCE, true, [params.value[0], A.create(0, A.Type.INTEGER, false, integerBytes(2048))]), password);
+  };
+  forge.pki.pbe.getCipherForPKCS12PBE = stub;
+  try {
+    (await openContainer(pkcs12Container([key, key, key, key, key, key, certificateBag(certificate)], PASSWORD), PASSWORD)).destroy();
+    assert.equal(derived.length, 6);
+    await rejectsWith(openContainer(pkcs12Container([key, key, key, key, key, key, key, certificateBag(certificate)], PASSWORD), PASSWORD), 'CONTAINER_LIMITS', 'decryption');
+    assert.equal(derived.length, 12, 'the seventh derivation is refused before it runs');
+    assert.equal(forge.pki.pbe.getCipherForPKCS12PBE, stub);
+  } finally { forge.pki.pbe.getCipherForPKCS12PBE = original; }
 });
 
 test('unsupported integrity and encryption algorithms are reported as such, not as a wrong password', async () => {

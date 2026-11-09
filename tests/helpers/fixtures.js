@@ -44,8 +44,23 @@ export function rsaFixture({ purpose, password = PASSWORD, profile = 'default', 
 
 // Assembles a PFX from prepared SafeBags. The MAC key uses the RFC 7292 BMPString
 // password, independently of how the bags were encrypted.
-export function pkcs12Container(safeBags, password = PASSWORD, { macIterations = 2048 } = {}) {
-  const authSafe = der(seq(seq(oid(O.data), context(0, [octet(der(seq(...safeBags)))]))));
+export function pkcs12Container(safeBags, password = PASSWORD, options = {}) {
+  return pkcs12FromContents([seq(oid(O.data), context(0, [octet(der(seq(...safeBags)))]))], password, options);
+}
+// EncryptedData ContentInfo (RFC 7292 5.1) holding SafeBags under pbeWithSHAAnd3-KeyTripleDES-CBC.
+export function encryptedSafe(safeBags, password = PASSWORD, { iterations = 2048 } = {}) {
+  const salt = forge.random.getBytesSync(8);
+  const key = forge.pkcs12.generateKey(password, forge.util.createBuffer(salt), 1, iterations, 24).getBytes();
+  const iv = forge.pkcs12.generateKey(password, forge.util.createBuffer(salt), 2, iterations, 8).getBytes();
+  const cipher = forge.des.startEncrypting(key, iv);
+  cipher.update(forge.util.createBuffer(der(seq(...safeBags))));
+  cipher.finish();
+  const scheme = seq(oid(forge.pki.oids['pbeWithSHAAnd3-KeyTripleDES-CBC']), seq(octet(salt), A.create(0, A.Type.INTEGER, false, integerBytes(iterations))));
+  return seq(oid(forge.pki.oids.encryptedData), context(0, [seq(integer(0),
+    seq(oid(O.data), scheme, A.create(A.Class.CONTEXT_SPECIFIC, 0, false, cipher.output.getBytes())))]));
+}
+export function pkcs12FromContents(contentInfos, password = PASSWORD, { macIterations = 2048 } = {}) {
+  const authSafe = der(seq(...contentInfos));
   const salt = forge.random.getBytesSync(16);
   const key = forge.pkcs12.generateKey(password, forge.util.createBuffer(salt), 3, macIterations, 20).getBytes();
   const mac = forge.hmac.create(); mac.start('sha1', key); mac.update(authSafe);
