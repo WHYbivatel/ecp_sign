@@ -33,11 +33,17 @@ const executablePath = process.env.CHROMIUM_EXECUTABLE || (existsSync(chromium.e
 let context;
 const liveTsp = process.env.NCA_LIVE_TSP === '1';
 const TSA = 'http://tsp.pki.gov.kz/';
+// The CAdES-T result is accepted only after the TSA certificate chain passes the revocation check.
+const NCA_HOSTS = ['tsp.pki.gov.kz', 'ocsp.pki.gov.kz', 'crl.pki.gov.kz', 'crl1.pki.gov.kz', 'crl.root.gov.kz'];
+const revocationUrl = url => /^https?:/.test(url) && NCA_HOSTS.slice(1).includes(new URL(url).host);
+// crl.root.gov.kz answers a "page blocked" HTML for the HeadlessChrome user agent (2026-11-09).
+const BROWSER_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
 try {
   context = await chromium.launchPersistentContext(join(folder, 'profile'), {
     executablePath, headless: true, viewport: { width: 620, height: 790 },
-    // Without NCA_LIVE_TSP the real TSA name never resolves, even if a request escaped the route.
-    args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`, '--no-first-run', ...(liveTsp ? [] : ['--host-resolver-rules=MAP tsp.pki.gov.kz ~NOTFOUND'])]
+    // Without NCA_LIVE_TSP the real NUC names never resolve, even if a request escaped the route.
+    args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`, '--no-first-run',
+      ...(liveTsp ? [`--user-agent=${BROWSER_UA}`] : [`--host-resolver-rules=${NCA_HOSTS.map(host => `MAP ${host} ~NOTFOUND`).join(', ')}`])]
   });
   const errors = [];
   const network = [];
@@ -48,7 +54,7 @@ try {
     const url = route.request().url();
     if (url === TSA) { tsaRequests++; if (tsaStub) { tsaStubbed++; return tsaStub(route); } }
     if (url === 'https://egov.kz/tegin-ui-test' || url === 'https://nca.pki.gov.kz/tegin-ui-test') return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><title>Tegin local UI fixture</title><h1>Artificial authentication request</h1>' });
-    if (url.startsWith(`http://127.0.0.1:${port}/`) || url.startsWith('chrome-extension:') || (liveTsp && url === 'http://tsp.pki.gov.kz/')) route.continue();
+    if (url.startsWith(`http://127.0.0.1:${port}/`) || url.startsWith('chrome-extension:') || (liveTsp && (url === 'http://tsp.pki.gov.kz/' || revocationUrl(url)))) route.continue();
     else route.abort();
   });
   const sw = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
@@ -424,7 +430,15 @@ try {
     await tool.locator('#verify-submit').click();
     await tool.locator('#result-title').filter({ hasText: 'Подпись верна' }).waitFor();
     assert.match(await tool.locator('#result-details').textContent(), /Метка времени:/);
-    console.log('PASS: browser CAdES-T with live NUC TSA, then offline embedded timestamp verification');
+    assert.match(await tool.locator('#result-details').textContent(), /Сертификат службы меток: не проверялся/);
+    console.log('PASS: browser CAdES-T with live NUC TSA (TSA chain revocation checked before release), then offline embedded timestamp verification');
+    await tool.locator('#again').click();
+    await tool.locator('#document').setInputFiles(join(folder, 'timestamped.p7s'));
+    await tool.locator('#check-revocation').check();
+    await tool.locator('#verify-submit').click();
+    await tool.locator('#result-title').filter({ hasText: 'Подпись верна' }).waitFor({ timeout: 60000 });
+    assert.match(await tool.locator('#result-details').textContent(), /Сертификат службы меток: не отозван по актуальным данным/);
+    console.log('PASS: live NUC OCSP and root CRL from the extension worker: the public TSA certificate chain is not revoked');
   }
   const popupPage = await context.newPage();
   await popupPage.setViewportSize({ width: 400, height: 600 });
@@ -913,7 +927,8 @@ try {
   assert.ok(!sensitive.includes(PASSWORD));
   // ncalayer-js-client probes the KAZTOKEN HTTP API itself; the route aborts that request.
   const allowed = ['https://egov.kz/tegin-ui-test', 'https://nca.pki.gov.kz/tegin-ui-test', 'https://127.0.0.1:24680/'];
-  assert.ok(network.every(url => allowed.includes(url) || url.startsWith(`http://127.0.0.1:${port}/`) || (url === TSA && (liveTsp || tsaStubbed > 0))), network.join('\n'));
+  assert.ok(network.every(url => allowed.includes(url) || url.startsWith(`http://127.0.0.1:${port}/`) || (url === TSA && (liveTsp || tsaStubbed > 0)) || (liveTsp && revocationUrl(url))), network.join('\n'));
+  if (!liveTsp) assert.ok(!network.some(revocationUrl), 'synthetic keys outside pinned NUC chains never reach revocation services');
   if (!liveTsp) assert.equal(tsaRequests, tsaStubbed, 'every TSA request outside NCA_LIVE_TSP was served by a local stub');
   assert.deepEqual(errors, []);
   const stored = await sw.evaluate(async () => ({ local: await chrome.storage.local.get(null), session: await chrome.storage.session.get(null) }));
