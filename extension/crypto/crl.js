@@ -151,7 +151,7 @@ export function statusFromCrls(full, delta, serial, numbering = 'rfc5280') {
   }
   const nextUpdate = Math.min(full.nextUpdate, merged?.nextUpdate ?? Infinity);
   const result = { source: merged ? 'crl+delta' : 'crl', thisUpdate: new Date(Math.max(full.thisUpdate, merged?.thisUpdate ?? 0)).toISOString(),
-    nextUpdate: new Date(nextUpdate).toISOString() };
+    nextUpdate: new Date(nextUpdate).toISOString(), expires: nextUpdate };
   if (!entry) return { ...result, status: 'good' };
   return { ...result, status: 'revoked', revocationTime: new Date(entry.revocationTime).toISOString(), reason: entry.reason };
 }

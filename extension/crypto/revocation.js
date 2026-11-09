@@ -192,7 +192,7 @@ export class RevocationChecker {
       if (!result) result = await this.viaCrl(certificate, issuer, profile, signal, errors);
       if (!result) { certificates.push({ ...entry, state: STATES.unavailable, code: errors.at(-1) || 'UNAVAILABLE', errors: [...new Set(errors)] }); continue; }
       const { status, expires, ...details } = result;
-      certificates.push({ ...entry, ...details, state: status === 'good' ? STATES.good : status === 'revoked' ? STATES.revoked : STATES.unknown,
+      certificates.push({ ...entry, ...details, expires: new Date(expires).toISOString(), state: status === 'good' ? STATES.good : status === 'revoked' ? STATES.revoked : STATES.unknown,
         ...(errors.length ? { errors: [...new Set(errors)] } : {}) });
     }
     return summarize(certificates, checkedAt);
@@ -201,10 +201,19 @@ export class RevocationChecker {
 
 function limitOf(name) { return { limit: LIMITS[name].bytes, timeout: LIMITS[name].timeout }; }
 
+// expires: the earliest moment any evidence of the path stops applying (OCSP nextUpdate or maximum
+// age, CRL nextUpdate); null unless every certificate has evidence.
 export function summarize(certificates, checkedAt, reason) {
   const required = certificates.some(entry => entry.required);
   let state = certificates.length ? SEVERITY.find(candidate => certificates.some(entry => entry.state === candidate)) : STATES.notChecked;
-  return { state, required, checkedAt, certificates, ...(reason ? { reason } : {}) };
+  const expires = certificates.length && certificates.every(entry => entry.expires) ? new Date(Math.min(...certificates.map(entry => Date.parse(entry.expires)))).toISOString() : null;
+  return { state, required, checkedAt, expires, certificates, ...(reason ? { reason } : {}) };
+}
+
+// Whether a summary still applies at `now`. Unpinned chains have no evidence to expire.
+export function isCurrent(result, now = Date.now()) {
+  if (result.state === STATES.notChecked && !result.required) return true;
+  return Boolean(result.expires) && now < Date.parse(result.expires) && now - Date.parse(result.checkedAt) <= REVOCATION_MAX_AGE;
 }
 
 // Current status versus the moment proven by a verified timestamp (Rules 500/НҚ p.14). It

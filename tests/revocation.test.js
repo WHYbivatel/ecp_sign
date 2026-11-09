@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { buildOcspRequest, verifyOcspResponse } from '../extension/crypto/ocsp.js';
 import { parseCrl, verifyCrl, statusFromCrls, deltaRelation, selectCrls } from '../extension/crypto/crl.js';
-import { RevocationChecker, memoryStore, fetchBounded, blocks, assessHistory, summarize } from '../extension/crypto/revocation.js';
+import { RevocationChecker, memoryStore, fetchBounded, blocks, assessHistory, summarize, isCurrent } from '../extension/crypto/revocation.js';
 import { ALLOWED_URLS, OCSP_URL, profileFor } from '../extension/crypto/revocation-profiles.js';
 import { certificateInfo } from '../extension/crypto/signer.js';
 import { trustStore } from '../extension/crypto/trust-store.js';
@@ -334,6 +334,20 @@ test('chain: incompatible complete and delta CRLs end as unavailable, never good
   // Same for contradictory issue times within one base.
   const conflict = { [FULL]: crl(ca, { number: 1469, thisUpdate: at, entries: hold() }), [DELTA]: crl(ca, { number: 63680, deltaBase: 1469, thisUpdate: at - 10 * minute, nextUpdate: Date.now() + 3600000, entries: unhold() }) };
   assert.equal((await (await crlNetwork(conflict)).checker.checkPath(path)).state, 'unavailable');
+});
+
+test('chain: expires is the earliest evidence deadline over the whole path', async () => {
+  const clock = { value: Date.now() };
+  const { checker, path } = await harness({ clock, ocsp: { status: 'good', thisUpdate: clock.value - 3 * minute } });
+  const result = await checker.checkPath(path);
+  assert.equal(result.state, 'good');
+  assert.equal(Date.parse(result.expires), Date.parse(result.certificates[0].expires), 'the OCSP answer ends first');
+  assert.ok(Math.abs(Date.parse(result.expires) - (clock.value + 2 * minute)) < 1000, 'OCSP thisUpdate + 5 min, not checkedAt + 5 min');
+  assert.equal(isCurrent(result, clock.value + minute), true);
+  assert.equal(isCurrent(result, clock.value + 2 * minute + 1000), false, 'stale before the five-minute recheck interval');
+  const viaCrl = await (await harness({ clock, ocsp: 'down' })).checker.checkPath(path);
+  assert.equal(Date.parse(viaCrl.expires), Math.min(...viaCrl.certificates.map(entry => Date.parse(entry.nextUpdate))), 'CRL nextUpdate, delta included');
+  assert.equal(summarize([{ state: 'unavailable', required: true }], new Date().toISOString()).expires, null);
 });
 
 test('chain: issuers without pinned sources are "not checked" and never shown as good', async () => {

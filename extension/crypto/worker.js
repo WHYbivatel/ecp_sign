@@ -8,7 +8,7 @@ import { forge, bytes as binaryBytes } from './encoding.js';
 import { verifyCms, describeCms } from './cms-verify.js';
 import { verifyEmbeddedTimestamp } from './timestamp.js';
 import { A, oidValue } from './encoding.js';
-import { RevocationChecker, blocks, summarize, assessHistory, REVOCATION_MAX_AGE } from './revocation.js';
+import { RevocationChecker, blocks, summarize, assessHistory, isCurrent, STATES } from './revocation.js';
 
 let signer;
 let busy = false;
@@ -28,11 +28,32 @@ function revocationFailure(result, subject) {
   error.code = `REVOCATION_${result.state.replace('-', '_').toUpperCase()}`; error.revocation = true;
   return error;
 }
+// A fresh check whose evidence already lapsed proves nothing: it counts as unavailable.
+async function checkPath(path) {
+  const result = path ? await revocation().checkPath(path) : notChecked('untrusted');
+  return blocks(result) || isCurrent(result) ? result : { ...result, state: STATES.unavailable, reason: 'expired' };
+}
 // Chain built to the bundled NCA roots when possible: only that path has pinned revocation sources.
 async function checkSigner() {
-  trust.revocation = revocationPath ? await revocation().checkPath(revocationPath) : notChecked('untrusted');
+  trust.revocation = await checkPath(revocationPath);
   const failure = revocationFailure(trust.revocation, 'Сертификат ключа');
   if (failure) throw failure;
+}
+async function checkStamp(stamp) {
+  stamp.revocation = await checkPath(stamp.certificates);
+  const failure = revocationFailure(stamp.revocation, 'Сертификат службы меток времени НУЦ');
+  if (failure) throw failure;
+}
+// Signing many documents and checking TSA chains can outlast OCSP or CRL evidence; it has to
+// apply at the moment the signature leaves the worker.
+async function confirmCurrent(timestamps) {
+  for (let pass = 0; pass < 3; pass++) {
+    const stale = timestamps.filter(stamp => !isCurrent(stamp.revocation));
+    if (isCurrent(trust.revocation) && !stale.length) return;
+    if (!isCurrent(trust.revocation)) await checkSigner();
+    for (const stamp of stale) await checkStamp(stamp);
+  }
+  throw revocationFailure({ state: STATES.unavailable, required: true }, 'Сертификат ключа');
 }
 self.onmessage = async ({ data }) => {
   if (busy) return;
@@ -91,7 +112,7 @@ self.onmessage = async ({ data }) => {
       const request = data.request;
       if (Date.now() < Date.parse(signer.info.summary.notBefore) || Date.now() > Date.parse(signer.info.summary.notAfter)) throw new Error('Срок действия сертификата ещё не наступил или уже истёк.');
       checkConstraints(request);
-      if (trust.revocation.state !== 'not-checked' && Date.now() - Date.parse(trust.revocation.checkedAt) > REVOCATION_MAX_AGE) await checkSigner();
+      if (!isCurrent(trust.revocation)) await checkSigner();
       const results = [];
       const timestamps = [];
       for (const doc of request.documents) {
@@ -109,11 +130,8 @@ self.onmessage = async ({ data }) => {
       }
       // The token is verified to the NCA root; its certificates must also be unrevoked now, otherwise
       // the stamp would not prove the signing time later (Rules 500/НҚ p.14, p.17).
-      for (const stamp of timestamps) {
-        stamp.revocation = stamp.certificates ? await revocation().checkPath(stamp.certificates) : notChecked('untrusted');
-        const failure = revocationFailure(stamp.revocation, 'Сертификат службы меток времени НУЦ');
-        if (failure) throw failure;
-      }
+      for (const stamp of timestamps) await checkStamp(stamp);
+      await confirmCurrent(timestamps);
       self.postMessage({ kind: 'signed', result: results, timestamps: timestamps.map(({ time, authority, revocation }) => ({ time, authority, revocation })) });
       signer.destroy(); signer = null;
       self.close();
