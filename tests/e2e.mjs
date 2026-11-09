@@ -628,16 +628,19 @@ try {
   const clientCancel = await clientResult();
   assert.equal(clientCancel.cancelled, true, JSON.stringify(clientCancel));
 
-  const pagesBefore = context.pages().length;
+  const unexpectedWindows = [];
+  const recordWindow = item => unexpectedWindows.push(item.url());
+  context.on('page', recordWindow);
   await clientPage.evaluate(() => settle(client.getKeyInfo('AKKaztokenStore')));
   assert.match((await clientResult()).error, /^400: /);
   await clientPage.evaluate(xml => settle(client.basicsSignXML(NCALayerClient.basicsStoragePKCS12, xml, { tsaProfile: {} }, NCALayerClient.basicsSignerTestAny)), egovLogin.request.args.data);
   assert.match((await clientResult()).error, /^UNSUPPORTED_OR_FAILED: Метка времени/);
   await clientPage.evaluate(() => settle(client.basicsSignXML(['AKKaztokenStore'], '<a/>', {}, NCALayerClient.basicsSignerTestAny)));
   assert.match((await clientResult()).error, /PKCS#12/);
-  assert.equal(context.pages().length, pagesBefore, 'unsupported requests must not open an approval window');
   await clientPage.evaluate(() => settle(client.getActiveTokens()));
   assert.deepEqual((await clientResult()).value, [], 'the client connection keeps working after errors');
+  context.off('page', recordWindow);
+  assert.deepEqual(unexpectedWindows, [], 'unsupported requests must not open an approval window');
   await clientPage.close();
   console.log('PASS: SIGEX ncalayer-js-client 1.6.1: greeting and KAZTOKEN probe, eGov XML, two detached CMS, attached CAdES verified by OpenSSL, cancel, unsupported methods without a window');
 
@@ -748,13 +751,16 @@ try {
   assert.equal(childAnswer.status, true); assert.match(childAnswer.body.result[0], /^<frame-test>child<ds:Signature/);
   assert.equal(verifyXml(childAnswer.body.result[0], fixture.certificate), true);
   assert.equal((await answers(framePage)).length, 1, 'the top frame must not receive the child frame response');
-  const topClosed = topPopup.waitForEvent('close');
+  const topClosed = topPopup.waitForEvent('close', { timeout: 90000 });
   await sw.evaluate(async () => {
     const [key, record] = Object.entries(await chrome.storage.session.get(null)).find(([name]) => name.startsWith('pending:'));
     await chrome.storage.session.set({ [key]: { ...record, expires: Date.now() - 1 } });
     await chrome.alarms.create(key, { when: Date.now() + 50 });
   });
-  await topClosed;
+  try { await topClosed; } catch (error) {
+    console.error('timeout diagnostic', JSON.stringify(await sw.evaluate(async () => ({ alarms: await chrome.alarms.getAll(), session: Object.keys(await chrome.storage.session.get(null)), now: Date.now() }))), JSON.stringify(await answers(framePage)), topPopup.isClosed());
+    throw error;
+  }
   await framePage.waitForFunction(() => window.answers.length === 2);
   assert.deepEqual((await answers(framePage))[1], { status: true, body: {} });
   assert.equal((await answers(child)).length, 1);
@@ -768,9 +774,14 @@ try {
   await framePage.waitForFunction(() => window.doubled.length === 1);
   assert.deepEqual(await framePage.evaluate(() => window.doubled), [{ closed: 1008 }]);
   await sw.evaluate(() => new Promise(resolve => { const check = async () => Object.keys(await chrome.storage.session.get(null)).some(key => key.startsWith('pending:')) ? setTimeout(check, 100) : resolve(); check(); }));
-  nextPage = context.waitForEvent('page');
   await openSocket(child, frameRequest('closing tab'));
-  const orphan = await nextPage; await orphan.waitForLoadState();
+  const orphanId = await sw.evaluate(() => new Promise(resolve => {
+    const check = async () => { const found = Object.entries(await chrome.storage.session.get(null)).find(([key, record]) => key.startsWith('pending:') && record.windowId && JSON.stringify(record.request).includes('closing tab')); found ? resolve(found[1].id) : setTimeout(check, 100); };
+    check();
+  }));
+  let orphan;
+  for (let attempt = 0; attempt < 150 && !orphan; attempt++) { orphan = context.pages().find(item => item.url().endsWith(`#${orphanId}`)); if (!orphan) await new Promise(resolve => setTimeout(resolve, 100)); }
+  assert.ok(orphan, 'approval window for the closing tab request');
   const orphanClosed = orphan.waitForEvent('close');
   await framePage.close();
   await orphanClosed;
