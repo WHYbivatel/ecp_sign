@@ -1,0 +1,14 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>local.tegin</groupId><artifactId>dss-validator</artifactId><version>1</version>
+  <properties><maven.compiler.release>17</maven.compiler.release><dss.version>6.5.1</dss.version><project.build.sourceEncoding>UTF-8</project.build.sourceEncoding></properties>
+  <dependencies>
+    <dependency><groupId>eu.europa.ec.joinup.sd-dss</groupId><artifactId>dss-pades-pdfbox</artifactId><version>${dss.version}</version></dependency>
+    <dependency><groupId>eu.europa.ec.joinup.sd-dss</groupId><artifactId>dss-utils-apache-commons</artifactId><version>${dss.version}</version></dependency>
+    <dependency><groupId>eu.europa.ec.joinup.sd-dss</groupId><artifactId>dss-crl-parser-stream</artifactId><version>${dss.version}</version></dependency>
+    <dependency><groupId>eu.europa.ec.joinup.sd-dss</groupId><artifactId>dss-validation</artifactId><version>${dss.version}</version></dependency>
+    <dependency><groupId>eu.europa.ec.joinup.sd-dss</groupId><artifactId>dss-policy-jaxb</artifactId><version>${dss.version}</version></dependency>
+    <dependency><groupId>eu.europa.ec.joinup.sd-dss</groupId><artifactId>dss-cms-object</artifactId><version>${dss.version}</version></dependency>
+    <dependency><groupId>org.slf4j</groupId><artifactId>slf4j-nop</artifactId><version>2.0.16</version></dependency>
+  </dependencies>
+</project>
