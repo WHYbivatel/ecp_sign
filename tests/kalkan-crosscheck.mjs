@@ -1,5 +1,5 @@
 // Development-only interop check. Never starts NCALayer or installs Java.
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -49,6 +49,18 @@ try {
       const output = execFileSync(java, ['-cp', `${jars}${delimiter}${folder}`, 'Verify', 'xml', path], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
       if (!output.includes('KALKAN XML VALID')) throw new Error(`${family} XML failed`);
       console.log(`PASS Kalkan ${family} XMLDSig`);
+      for (const name of ['egov-login', 'egov-service-sign', 'nuc-cabinet-login']) {
+        const xml = JSON.parse(readFileSync(resolve(`tests/fixtures/portals/${name}.json`), 'utf8')).request.args.data;
+        const signed = await signXml(signer, xml);
+        writeFileSync(path, signed);
+        const verified = execFileSync(java, ['-cp', `${jars}${delimiter}${folder}`, 'Verify', 'xml', path], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        if (!verified.includes('KALKAN XML VALID')) throw new Error(`${family} ${name} XML failed`);
+        writeFileSync(path, signed.replace(/PORTAL|00000000-0000-4000-8000-000000000000|SYNTH-0001/, 'CHANGED'));
+        let rejected = false;
+        try { execFileSync(java, ['-cp', `${jars}${delimiter}${folder}`, 'Verify', 'xml', path], { stdio: 'pipe' }); } catch { rejected = true; }
+        if (!rejected) throw new Error(`${family} ${name} changed XML accepted`);
+        console.log(`PASS Kalkan ${family} XMLDSig of the ${name} portal payload; changed payload rejected`);
+      }
     } finally { signer.destroy(); fixture.container.fill(0); }
   }
 } finally { rmSync(folder, { recursive: true, force: true }); }

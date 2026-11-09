@@ -1,0 +1,31 @@
+{
+  "portal": "eGov · вход по ЭЦП",
+  "origin": "https://egov.kz",
+  "source": {
+    "page": "https://egov.kz/kk/identity/main (редирект с https://idp.egov.kz/idp/login)",
+    "script": "https://egov.kz/_next/static/chunks/4250-251581e72057e301.js",
+    "observed": "2026-11-09",
+    "method": "Публичный бандл без входа: модуль 85883 формирует запрос, модуль с new WebSocket(\"wss://127.0.0.1:13579/\") отправляет его в onopen и принимает ответ только при body.result.length."
+  },
+  "anonymized": "Данные запроса — фиксированный XML из бандла, персональных данных нет. chain берётся из process.env.NEXT_PUBLIC_PKI_ROOT_CHAIN_TEST; в браузерной сборке он не задан, JSON.stringify опускает поле.",
+  "request": {
+    "module": "kz.gov.pki.knca.basics",
+    "method": "sign",
+    "args": {
+      "data": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><login><client-type>PORTAL</client-type></login>",
+      "allowedStorages": [
+        "PKCS12",
+        "AKKaztokenStore",
+        "AKKZIDCardStore"
+      ],
+      "format": "xml",
+      "signingParams": {},
+      "signerParams": {
+        "extKeyUsageOids": [
+          "1.3.6.1.5.5.7.3.2"
+        ]
+      },
+      "locale": "ru"
+    }
+  }
+}

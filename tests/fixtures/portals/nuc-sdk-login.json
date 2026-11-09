@@ -1,0 +1,42 @@
+{
+  "portal": "НУЦ РК · sdk.pki.gov.kz (вход)",
+  "origin": "https://sdk.pki.gov.kz",
+  "source": {
+    "page": "https://sdk.pki.gov.kz/",
+    "script": "https://sdk.pki.gov.kz/static/js/main.a7722edb.js",
+    "observed": "2026-11-09",
+    "method": "Публичный бандл: класс с connect() переиспользует один WebSocket; sign(data, oids) отправляет запрос сразу после open."
+  },
+  "anonymized": "data передаётся вызывающим кодом и не наблюдалась; использован синтетический XML. extKeyUsageOids — строка oids.split(','), здесь clientAuth.",
+  "request": {
+    "module": "kz.gov.pki.knca.basics",
+    "method": "sign",
+    "args": {
+      "allowedStorages": [
+        "AKKaztokenStore",
+        "AKKZIDCardStore",
+        "AKEToken72KStore",
+        "AKEToken5110Store",
+        "AKJaCartaStore",
+        "PKCS12",
+        "JKS",
+        "AKAKEYStore"
+      ],
+      "format": "xml",
+      "data": "<auth><challenge>synthetic</challenge></auth>",
+      "signingParams": {
+        "decode": false,
+        "encapsulate": false,
+        "digested": false,
+        "tsaProfile": null
+      },
+      "signerParams": {
+        "extKeyUsageOids": [
+          "1.3.6.1.5.5.7.3.2"
+        ],
+        "chain": []
+      },
+      "locale": "ru"
+    }
+  }
+}
