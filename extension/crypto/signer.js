@@ -2,7 +2,7 @@ import { nca256 } from './nca-curves.js';
 import GostSign from '../vendor/gost/sign.cjs';
 import GostDigest from '../vendor/gost/digest.cjs';
 import { A, O, forge, parse, binary, bytes, der, oidValue, base64, utf8, seq, set } from './encoding.js';
-import { inspectPkcs12 } from '../lib/pkcs12.js';
+import { inspectPkcs12, ContainerError } from '../lib/pkcs12.js';
 
 const schemes = {
   [O.gost512]: { label: 'ГОСТ 34.10-2015 · 512 бит', version: 2012, length: 512, namedCurve: 'T-512-A', curveOid: '1.2.398.3.10.1.1.2.2.1', hash: O.hash512, signature: O.sig512 },
@@ -84,11 +84,17 @@ export function certificateInfo(raw) {
   if (!algorithm) {
     const error = new Error(`Алгоритм ключа ${keyOid} пока не поддерживается.`);
     error.code = 'UNSUPPORTED_CERTIFICATE_ALGORITHM';
+    error.oid = keyOid;
     throw error;
   }
   if (keyOid !== O.rsa) {
     const params = spki.value[0].value[1];
-    if (!params || params.type !== A.Type.SEQUENCE || oidValue(params.value[0]) !== algorithm.curveOid) throw new Error('Параметры ГОСТ не поддерживаются.');
+    if (!params || params.type !== A.Type.SEQUENCE || oidValue(params.value[0]) !== algorithm.curveOid) {
+      const error = new Error('Параметры ГОСТ не поддерживаются.');
+      error.code = 'UNSUPPORTED_CERTIFICATE_ALGORITHM';
+      error.oid = keyOid;
+      throw error;
+    }
   }
   return { certificate, spki, serial, issuer: tbs[offset + 2], subject,
     raw: der(certificate), keyOid, algorithm, eku, ekuCritical, keyUsage, ca, pathLength, subjectKeyId, authorityKeyId, unknownCritical,
@@ -104,22 +110,129 @@ export function certificateInfo(raw) {
   };
 }
 
+const MAX_ITERATIONS = 1000000;
+const PBES2 = '1.2.840.113549.1.5.13', PBKDF2 = '1.2.840.113549.1.5.12';
+const PKCS12_PBE = new Set(['1.2.840.113549.1.12.1.3', '1.2.840.113549.1.12.1.6']);
+const PBES2_CIPHERS = new Set(['2.16.840.1.101.3.4.1.2', '2.16.840.1.101.3.4.1.22', '2.16.840.1.101.3.4.1.42', '1.2.840.113549.3.7', '1.3.14.3.2.7']);
+// forge derives hmacWithSHA224 (1.2.840.113549.2.8) with SHA-512/224, so it is not accepted.
+const PBES2_PRFS = new Set(['1.2.840.113549.2.7', '1.2.840.113549.2.9', '1.2.840.113549.2.10', '1.2.840.113549.2.11']);
+const MAC_DIGESTS = { '1.3.14.3.2.26': 'sha1', '2.16.840.1.101.3.4.2.1': 'sha256', '2.16.840.1.101.3.4.2.2': 'sha384',
+  '2.16.840.1.101.3.4.2.3': 'sha512', '1.2.840.113549.2.5': 'md5' };
+const MAC_KEY_BYTES = { sha1: 20, sha256: 32, sha384: 48, sha512: 64, md5: 16 };
+
 function checkKdfLimits(node, depth = 0) {
-  if (depth > 32) throw new Error('Слишком сложная структура контейнера.');
+  if (depth > 32) throw new ContainerError('Слишком сложная структура контейнера.', 'CONTAINER_LIMITS');
   if (!Array.isArray(node.value)) return;
   if (node.type === A.Type.SEQUENCE && node.value[0]?.type === A.Type.OID) {
     const id = oidValue(node.value[0]);
-    if (id.startsWith('1.2.840.113549.1.12.1.') || id === '1.2.840.113549.1.5.12') {
+    if (id.startsWith('1.2.840.113549.1.12.1.') || id === PBKDF2) {
       const iterations = node.value[1]?.value?.[1];
       if (iterations?.type === A.Type.INTEGER) validateIterations(iterations.value);
     }
   }
   for (const child of node.value) checkKdfLimits(child, depth + 1);
 }
-function validateIterations(value) {
+function integerValue(value) {
+  if (typeof value !== 'string' || !value.length || value.charCodeAt(0) & 128) return -1;
   let count = 0;
   for (const char of value) count = count * 256 + char.charCodeAt(0);
-  if (count < 1 || count > 1000000) throw new Error('Число итераций защиты контейнера не поддерживается.');
+  return count;
+}
+function validateIterations(value) {
+  const count = integerValue(value);
+  if (count < 1 || count > MAX_ITERATIONS) throw new ContainerError('Число итераций защиты контейнера не поддерживается.', 'CONTAINER_LIMITS');
+  return count;
+}
+
+// Diagnostics carry only algorithm OIDs and bounded counters: no names, IIN, file names, DER or key bytes.
+const safeOid = value => typeof value === 'string' && /^\d{1,9}(\.\d{1,9}){1,24}$/.test(value) ? value : undefined;
+const safeCount = value => Number.isSafeInteger(value) && value >= 0 ? Math.min(value, MAX_ITERATIONS + 1) : undefined;
+function describeEncryption(algorithm) {
+  const scheme = oidValue(algorithm.value[0]);
+  const params = algorithm.value[1];
+  if (scheme === PBES2) {
+    const [kdf, cipher] = params.value;
+    const kdfParams = kdf.value[1].value;
+    const prf = kdfParams.find(node => node.type === A.Type.SEQUENCE);
+    return { scheme, kdf: oidValue(kdf.value[0]), prf: prf ? oidValue(prf.value[0]) : undefined,
+      cipher: oidValue(cipher.value[0]), iterations: integerValue(kdfParams[1]?.value) };
+  }
+  return { scheme, iterations: integerValue(params?.value?.[1]?.value) };
+}
+function safeEncryption(entry) {
+  return { scheme: safeOid(entry.scheme), kdf: safeOid(entry.kdf), prf: safeOid(entry.prf), cipher: safeOid(entry.cipher), iterations: safeCount(entry.iterations) };
+}
+function supportedEncryption(entry) {
+  if (PKCS12_PBE.has(entry.scheme)) return true;
+  return entry.scheme === PBES2 && entry.kdf === PBKDF2 && PBES2_CIPHERS.has(entry.cipher) && (entry.prf === undefined || PBES2_PRFS.has(entry.prf));
+}
+function visibleEncryption(authSafe) {
+  const found = [];
+  for (const content of authSafe.value) {
+    const value = content.value[1].value[0];
+    if (oidValue(content.value[0]) === O.data) {
+      for (const bag of parse(value.value).value) {
+        if (oidValue(bag.value[0]) === forge.pki.oids.pkcs8ShroudedKeyBag) found.push(describeEncryption(bag.value[1].value[0].value[0]));
+      }
+    } else found.push(describeEncryption(value.value[1].value[1]));
+  }
+  return found;
+}
+
+function verifyMac(pfx, authSafeBytes, password, profile) {
+  let algorithm, expected, salt, iterations;
+  try {
+    const [digestInfo, macSalt, macIterations] = pfx.value[2].value;
+    algorithm = oidValue(digestInfo.value[0].value[0]);
+    expected = digestInfo.value[1].value; salt = macSalt.value;
+    iterations = macIterations ? integerValue(macIterations.value) : 1;
+    if (typeof expected !== 'string' || typeof salt !== 'string') throw new Error();
+  } catch { throw new ContainerError(undefined, 'CONTAINER_MALFORMED'); }
+  profile.integrity = { algorithm: safeOid(algorithm), iterations: safeCount(iterations) };
+  if (iterations < 1 || iterations > MAX_ITERATIONS) throw new ContainerError('Число итераций защиты контейнера не поддерживается.', 'CONTAINER_LIMITS');
+  const name = MAC_DIGESTS[algorithm];
+  if (!name) throw new ContainerError(undefined, 'UNSUPPORTED_INTEGRITY_ALGORITHM');
+  const md = forge.md[name].create();
+  // RFC 7292 B.1: the MAC key is derived from the BMPString (UTF-16BE) password.
+  const key = forge.pkcs12.generateKey(password, forge.util.createBuffer(salt), 3, iterations, MAC_KEY_BYTES[name], md);
+  const mac = forge.hmac.create();
+  mac.start(md, key);
+  mac.update(authSafeBytes);
+  const actual = mac.digest().getBytes();
+  if (actual.length !== expected.length) throw new ContainerError(undefined, 'PASSWORD_OR_DAMAGED');
+  let difference = 0;
+  for (let i = 0; i < actual.length; i++) difference |= actual.charCodeAt(i) ^ expected.charCodeAt(i);
+  if (difference) throw new ContainerError(undefined, 'PASSWORD_OR_DAMAGED');
+}
+
+function decryptSafeContents(pfx, password) {
+  // PKCS#12 PBE derives keys from the BMPString password. For PBES2 (RFC 8018) the
+  // password octets differ by producer: OpenSSL and current Java use UTF-8, Kalkan
+  // uses the low byte of each UTF-16 unit, and node-forge writers pass the JavaScript
+  // string to PBKDF2 unconverted. Non-ASCII passwords try them in that order. The full
+  // password is already authenticated by the MAC and the key is later matched
+  // against its certificate.
+  const encodings = [forge.util.encodeUtf8(password)];
+  if (/[^\x00-\x7f]/.test(password)) encodings.push(password.replace(/[^]/g, char => String.fromCharCode(char.charCodeAt(0) & 255)), password);
+  const pbe = forge.pki.pbe, pbes2 = pbe.getCipherForPBES2;
+  const authenticated = A.create(A.Class.UNIVERSAL, A.Type.SEQUENCE, true, pfx.value.slice(0, 2));
+  let failure;
+  for (const encoded of encodings) {
+    pbe.getCipherForPBES2 = (oid, params) => pbes2(oid, params, encoded);
+    // MAC is verified by verifyMac; forge only decrypts the authenticated contents.
+    try { return forge.pkcs12.pkcs12FromAsn1(authenticated, true, password); }
+    catch (error) { failure = error; if (error?.oid) break; }
+    finally { pbe.getCipherForPBES2 = pbes2; }
+  }
+  throw new ContainerError(undefined, failure?.oid ? 'UNSUPPORTED_ENCRYPTION_ALGORITHM' : 'DECRYPTION_FAILED');
+}
+
+function containerDiagnostic(error, profile = {}) {
+  return { stage: error.stage || undefined, code: error.code, container: {
+    size: safeCount(profile.size), encoding: ['DER', 'BER'].includes(profile.encoding) ? profile.encoding : undefined,
+    integrity: profile.integrity, encryption: profile.encryption, bags: profile.bags,
+    keyAlgorithms: profile.keyAlgorithms?.map(safeOid).filter(Boolean)
+  } };
 }
 
 function fixedScalar(raw, size) {
@@ -129,37 +242,72 @@ function fixedScalar(raw, size) {
     if ([A.Type.OCTETSTRING, A.Type.INTEGER].includes(inner.type) && typeof inner.value === 'string') scalar = bytes(inner.value);
   } catch { /* Common PKCS#8 representations include a bare scalar. */ }
   if (scalar.length === size + 1 && scalar[0] === 0) scalar = scalar.subarray(1);
-  if (scalar.length !== size) throw new Error('Неподдерживаемое представление закрытого ключа ГОСТ.');
+  if (scalar.length !== size) throw new ContainerError('Неподдерживаемое представление закрытого ключа ГОСТ.', 'UNSUPPORTED_KEY_ALGORITHM');
   return scalar.slice();
 }
 
-export async function openContainer(container, password, { now = Date.now() } = {}) {
+export async function openContainer(container, password, options = {}) {
+  const state = { stage: 'structure', profile: {} };
+  try { return await openAuthenticatedContainer(container, password, options, state); }
+  catch (error) {
+    const failure = error instanceof ContainerError ? error : new ContainerError(undefined, 'INTERNAL', state.stage);
+    if (error?.certificate) failure.certificate = error.certificate;
+    failure.diagnostic = containerDiagnostic(failure, state.profile);
+    throw failure;
+  }
+}
+
+async function openAuthenticatedContainer(container, password, { now = Date.now() } = {}, state) {
+  const { profile } = state;
   inspectPkcs12(container);
-  const pfx = parse(container);
-  if (pfx.value.length !== 3) throw new Error('Контейнер без проверки целостности не поддерживается.');
+  profile.size = container.length;
+  let pfx, authSafeBytes, authSafe;
+  try {
+    pfx = parse(container);
+    profile.encoding = der(pfx) === binary(container) ? 'DER' : 'BER';
+    authSafeBytes = pfx.value[1].value[1].value[0].value;
+    authSafe = parse(authSafeBytes);
+  } catch { throw new ContainerError(undefined, 'CONTAINER_MALFORMED'); }
+  if (pfx.value.length !== 3) throw new ContainerError(undefined, 'CONTAINER_NO_INTEGRITY');
+  state.stage = 'limits';
   checkKdfLimits(pfx);
-  const authSafe = parse(pfx.value[1].value[1].value[0].value);
   for (const content of authSafe.value) {
     checkKdfLimits(content);
     if (oidValue(content.value[0]) === O.data) checkKdfLimits(parse(content.value[1].value[0].value));
   }
-  const macIterations = pfx.value[2].value[2];
-  if (macIterations) validateIterations(macIterations.value);
-  let store;
-  try { store = forge.pkcs12.pkcs12FromAsn1(pfx, true, password); }
-  catch { throw new Error('Не удалось открыть контейнер: проверьте пароль и формат файла.'); }
+  let encryption = [];
+  try { encryption = visibleEncryption(authSafe); } catch { /* Reported by decryption if unreadable. */ }
+  profile.encryption = encryption.map(safeEncryption);
+  state.stage = 'password';
+  if (typeof password !== 'string' || /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(password)) throw new ContainerError(undefined, 'PASSWORD_ENCODING');
+  state.stage = 'integrity';
+  verifyMac(pfx, authSafeBytes, password, profile);
+  state.stage = 'decryption';
+  if (!encryption.every(supportedEncryption)) throw new ContainerError(undefined, 'UNSUPPORTED_ENCRYPTION_ALGORITHM');
+  const store = decryptSafeContents(pfx, password);
+  state.stage = 'key-pair';
   const bags = store.safeContents.flatMap(safe => safe.safeBags);
   const certBags = bags.filter(bag => bag.type === forge.pki.oids.certBag);
   const keyBags = bags.filter(bag => bag.type === forge.pki.oids.pkcs8ShroudedKeyBag || bag.type === forge.pki.oids.keyBag);
+  profile.bags = { keys: keyBags.length, certificates: certBags.length, other: bags.length - keyBags.length - certBags.length };
+  const unsupportedKeys = new Set(), supportedKeys = new Set();
+  profile.keyAlgorithms = [];
   for (const keyBag of keyBags) {
     for (const certBag of certBags) {
+      state.stage = 'key-pair';
       let info;
       try { info = certificateInfo(certBag.cert ? forge.pki.certificateToAsn1(certBag.cert) : certBag.asn1); }
-      catch { continue; }
+      catch (error) {
+        if (error?.code === 'UNSUPPORTED_CERTIFICATE_ALGORITHM') unsupportedKeys.add(error.oid);
+        if (error?.oid && !profile.keyAlgorithms.includes(error.oid)) profile.keyAlgorithms.push(error.oid);
+        continue;
+      }
+      supportedKeys.add(info.keyOid);
+      if (!profile.keyAlgorithms.includes(info.keyOid)) profile.keyAlgorithms.push(info.keyOid);
       let key, publicKey;
       if (info.keyOid === O.rsa && keyBag.key) {
         if (keyBag.key.n.toString(16) !== certBag.cert?.publicKey.n.toString(16) || keyBag.key.e.toString(16) !== certBag.cert?.publicKey.e.toString(16)) continue;
-        if (keyBag.key.n.bitLength() < 2048) throw new Error('RSA-ключи короче 2048 бит не поддерживаются.');
+        if (keyBag.key.n.bitLength() < 2048) throw new ContainerError(undefined, 'KEY_TOO_WEAK');
         const privateInfo = forge.pki.wrapRsaPrivateKey(forge.pki.privateKeyToAsn1(keyBag.key));
         key = await crypto.subtle.importKey('pkcs8', bytes(der(privateInfo)), { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
         publicKey = await crypto.subtle.importKey('spki', bytes(der(info.spki)), { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
@@ -177,13 +325,17 @@ export async function openContainer(container, password, { now = Date.now() } = 
           if (!matches(key)) { key.fill(0); continue; }
         }
       } else continue;
+      state.stage = 'certificate';
       if (now < Date.parse(info.summary.notBefore) || now > Date.parse(info.summary.notAfter)) {
         if (key instanceof Uint8Array) key.fill(0);
-        const error = new Error('Срок действия сертификата ещё не наступил или уже истёк.');
+        const error = new ContainerError(undefined, 'CERTIFICATE_NOT_VALID_NOW');
         error.certificate = { ...info.summary };
         throw error;
       }
-      if (info.keyUsage !== null && !(info.keyUsage & 192)) throw new Error('Сертификат не разрешает цифровую подпись.');
+      if (info.keyUsage !== null && !(info.keyUsage & 192)) {
+        if (key instanceof Uint8Array) key.fill(0);
+        throw new ContainerError(undefined, 'CERTIFICATE_NO_DIGITAL_SIGNATURE');
+      }
       // The browser worker owns all decrypted data and is terminated after each operation.
       let rsaKey = info.keyOid === O.rsa ? keyBag.key : null;
       return {
@@ -225,7 +377,9 @@ export async function openContainer(container, password, { now = Date.now() } = 
       };
     }
   }
-  throw new Error('В контейнере не найдена поддерживаемая пара ключа и сертификата.');
+  state.stage = 'key-pair';
+  if (unsupportedKeys.size && !supportedKeys.size) throw new ContainerError(undefined, 'UNSUPPORTED_KEY_ALGORITHM');
+  throw new ContainerError(undefined, 'NO_KEY_PAIR');
 }
 
 export { GostSign, GostDigest };

@@ -3,20 +3,44 @@ export const MAX_CONTAINER_BYTES = 4 * 1024 * 1024;
 const DATA_OID = [42, 134, 72, 134, 247, 13, 1, 7, 1];
 const ENCRYPTED_DATA_OID = [42, 134, 72, 134, 247, 13, 1, 7, 6];
 
+// Stable failure codes for opening a container. Messages are safe to show to the
+// user; library exceptions are never forwarded.
+export const CONTAINER_FAILURES = Object.freeze({
+  CONTAINER_EMPTY: ['structure', 'Файл пуст или недоступен.'],
+  CONTAINER_TOO_LARGE: ['structure', 'Размер файла превышает 4 МБ.'],
+  CONTAINER_MALFORMED: ['structure', 'Не удалось распознать структуру PKCS#12.'],
+  CONTAINER_LIMITS: ['limits', 'Параметры защиты контейнера превышают допустимые ограничения.'],
+  CONTAINER_NO_INTEGRITY: ['integrity', 'Контейнер без проверки целостности не поддерживается.'],
+  UNSUPPORTED_INTEGRITY_ALGORITHM: ['integrity', 'Алгоритм проверки целостности контейнера не поддерживается.'],
+  PASSWORD_ENCODING: ['password', 'Пароль содержит недопустимую последовательность символов Unicode.'],
+  PASSWORD_OR_DAMAGED: ['integrity', 'Пароль не подошёл или контейнер повреждён.'],
+  UNSUPPORTED_ENCRYPTION_ALGORITHM: ['decryption', 'Алгоритм шифрования контейнера не поддерживается.'],
+  DECRYPTION_FAILED: ['decryption', 'Проверка целостности пройдена, но содержимое контейнера не удалось расшифровать.'],
+  UNSUPPORTED_KEY_ALGORITHM: ['key', 'Алгоритм ключа в контейнере не поддерживается.'],
+  KEY_TOO_WEAK: ['key', 'RSA-ключи короче 2048 бит не поддерживаются.'],
+  NO_KEY_PAIR: ['key-pair', 'В контейнере не найдена поддерживаемая пара ключа и сертификата.'],
+  CERTIFICATE_NOT_VALID_NOW: ['certificate', 'Срок действия сертификата ещё не наступил или уже истёк.'],
+  CERTIFICATE_NO_DIGITAL_SIGNATURE: ['certificate', 'Сертификат не разрешает цифровую подпись.'],
+  INTERNAL: [null, 'Не удалось открыть контейнер из-за внутренней ошибки.']
+});
+
 export class ContainerError extends Error {
-  constructor(message = 'Не удалось распознать структуру PKCS#12.') {
-    super(message);
+  constructor(message, code = 'CONTAINER_MALFORMED', stage) {
+    const [defaultStage, defaultMessage] = CONTAINER_FAILURES[code] || CONTAINER_FAILURES.INTERNAL;
+    super(message || defaultMessage);
     this.name = 'ContainerError';
+    this.code = code;
+    this.stage = stage || defaultStage;
   }
 }
 
 export function inspectPkcs12(bytes) {
-  if (!(bytes instanceof Uint8Array) || bytes.length === 0) throw new ContainerError('Файл пуст или недоступен.');
-  if (bytes.length > MAX_CONTAINER_BYTES) throw new ContainerError('Размер файла превышает 4 МБ.');
+  if (!(bytes instanceof Uint8Array) || bytes.length === 0) throw new ContainerError(undefined, 'CONTAINER_EMPTY');
+  if (bytes.length > MAX_CONTAINER_BYTES) throw new ContainerError(undefined, 'CONTAINER_TOO_LARGE');
 
   let nodeCount = 0;
   function read(offset, limit, depth = 0) {
-    if (depth > 32 || ++nodeCount > 50000) throw new ContainerError('Слишком сложная структура контейнера.');
+    if (depth > 32 || ++nodeCount > 50000) throw new ContainerError('Слишком сложная структура контейнера.', 'CONTAINER_LIMITS');
     const start = offset;
     if (offset + 2 > limit) throw new ContainerError();
     const tag = bytes[offset++];

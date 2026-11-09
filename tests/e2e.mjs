@@ -100,6 +100,58 @@ try {
   assert.deepEqual(readFileSync(join(folder, 'document')), data);
   console.log('PASS: browser PKCS12 unlock, wrong password rejection, explicit approval, CMS verified by OpenSSL');
 
+  // Regression: OpenSSL 3 default PKCS#12 (PBES2/AES-256) with a non-ASCII password.
+  const unicodePassword = 'Ұлттық куәлік 2026 пароль';
+  const unicodeKey = rsaFixture({ password: unicodePassword });
+  const unicodeFile = { name: 'unicode-test-key.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(unicodeKey.container) };
+  const unicodeOpened = context.waitForEvent('page');
+  await send(common);
+  popup = await unicodeOpened;
+  await popup.locator('#origin').filter({ hasText: `http://127.0.0.1:${port}` }).waitFor();
+  await popup.locator('#key-file').setInputFiles(unicodeFile);
+  await popup.locator('#password').fill('Ұлттық куәлік 2025 пароль');
+  await popup.locator('#unlock').click();
+  await popup.locator('#status[data-error]').filter({ hasText: 'Пароль не подошёл или контейнер повреждён.' }).waitFor();
+  assert.equal(await popup.locator('#password').inputValue(), '');
+  assert.equal(await popup.locator('#approve').isDisabled(), true);
+  assert.equal(await popup.locator('#certificate').isHidden(), true);
+  await popup.locator('#key-diagnostic summary').click();
+  await popup.setViewportSize({ width: 870, height: 850 });
+  await popup.screenshot({ path: resolve('artifacts/pkcs12-error-diagnostic.png'), fullPage: true });
+  const diagnostic = JSON.parse(await popup.locator('#key-diagnostic-data').textContent());
+  assert.equal(diagnostic.code, 'PASSWORD_OR_DAMAGED'); assert.equal(diagnostic.stage, 'integrity');
+  assert.equal(diagnostic.product, 'Tegin'); assert.match(diagnostic.browser, /\d/);
+  assert.equal(diagnostic.container.integrity.algorithm, '2.16.840.1.101.3.4.2.1');
+  assert.ok(diagnostic.container.encryption.some(entry => entry.scheme === '1.2.840.113549.1.5.13'));
+  const diagnosticText = JSON.stringify(diagnostic);
+  for (const secret of ['unicode-test-key', 'Tegin disposable test', 'Ұлттық', 'пароль']) assert.ok(!diagnosticText.includes(secret), `diagnostic leaks ${secret}`);
+  // A different file clears the error; a late worker reply after another file change must not unlock signing.
+  await popup.locator('#key-file').setInputFiles({ name: 'other.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(fixture.container) });
+  assert.equal(await popup.locator('#key-diagnostic').isHidden(), true);
+  await popup.locator('#password').fill(PASSWORD);
+  await popup.locator('#unlock').click();
+  await popup.locator('#key-file').setInputFiles(unicodeFile);
+  await popup.waitForTimeout(1500);
+  assert.equal(await popup.locator('#certificate').isHidden(), true, 'stale worker must not open the previous key');
+  assert.equal(await popup.locator('#approve').isDisabled(), true);
+  await popup.locator('#password').fill(unicodePassword);
+  await popup.locator('#unlock').click();
+  await popup.locator('#certificate:not([hidden])').waitFor({ timeout: 15000 });
+  assert.equal(await popup.locator('#password').inputValue(), '');
+  assert.equal(await popup.locator('#key-diagnostic').isHidden(), true);
+  await popup.locator('#approve').click();
+  answer = await result();
+  assert.equal(answer.code, '200');
+  const unicodeCms = Buffer.from(answer.responseObject, 'base64');
+  writeFileSync(join(folder, 'unicode.p7s'), unicodeCms);
+  writeFileSync(join(folder, 'unicode-cert.pem'), unicodeKey.certificate);
+  execFileSync('openssl', ['cms', '-verify', '-binary', '-inform', 'DER', '-in', join(folder, 'unicode.p7s'), '-CAfile', join(folder, 'unicode-cert.pem'), '-purpose', 'any', '-out', join(folder, 'unicode-document')], { stdio: 'pipe' });
+  assert.deepEqual(readFileSync(join(folder, 'unicode-document')), data);
+  const tampered = Buffer.from(unicodeCms); tampered[tampered.indexOf(data) + 1] ^= 1;
+  writeFileSync(join(folder, 'unicode-tampered.p7s'), tampered);
+  assert.throws(() => execFileSync('openssl', ['cms', '-verify', '-binary', '-inform', 'DER', '-in', join(folder, 'unicode-tampered.p7s'), '-CAfile', join(folder, 'unicode-cert.pem'), '-purpose', 'any', '-out', join(folder, 'unicode-tampered-out')], { stdio: 'pipe' }));
+  console.log('PASS: PBES2 PKCS12 with a Kazakh/Cyrillic password: precise error, anonymous diagnostic, stale-worker guard, retry, OpenSSL-verified CMS, tampered document rejected');
+
   const basics = { module: 'kz.gov.pki.knca.basics', method: 'sign', args: { allowedStorages: ['PKCS12'], format: 'xml', data: '<request><text>Тест браузера</text></request>', signingParams: {}, signerParams: { extKeyUsageOids: [], chain: [] } } };
   popup = await confirmation(basics);
   await popup.locator('#approve').click();

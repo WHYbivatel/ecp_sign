@@ -82,7 +82,8 @@ self.onmessage = async ({ data }) => {
     }
   } catch (error) {
     const certificate = data.kind === 'open' ? (signer ? { ...signer.info.summary, trust } : error.certificate) : undefined;
-    self.postMessage({ kind: 'error', message: error.message || 'Операция не выполнена.', certificate });
+    const diagnostic = data.kind === 'open' && !signer ? error.diagnostic : undefined;
+    self.postMessage({ kind: 'error', message: error.message || 'Операция не выполнена.', certificate, code: diagnostic?.code, diagnostic });
     signer?.destroy(); signer = null;
   } finally { busy = false; }
 };

@@ -38,6 +38,7 @@ function lock() {
   $('#show-password').setAttribute('aria-pressed', 'false');
   $('#show-password').setAttribute('aria-label', 'Показать пароль');
   $('#certificate').hidden = true;
+  $('#key-diagnostic').hidden = true; $('#key-diagnostic').open = false; $('#key-diagnostic-data').textContent = '';
   $('#key-form').hidden = verifyMode;
   $('#step').textContent = verifyMode ? 'Без ключа' : '01 / 02';
   updateControls();
@@ -202,13 +203,31 @@ function showCertificate(certificate, readOnly = false) {
   $('#cert-fingerprint').textContent = certificate.fingerprint || '—';
   $('#step').textContent = readOnly ? '01 / 02' : '02 / 02'; updateControls();
 }
+function browserLabel() {
+  const brand = navigator.userAgentData?.brands?.find(item => /Chrom|Edge|Opera|Yandex/.test(item.brand) && item.brand !== 'Chromium')
+    || navigator.userAgentData?.brands?.find(item => item.brand === 'Chromium');
+  if (brand) return `${brand.brand} ${brand.version}`;
+  const firefox = /Firefox\/(\d+)/.exec(navigator.userAgent);
+  return firefox ? `Firefox ${firefox[1]}` : 'unknown';
+}
+function showDiagnostic(diagnostic) {
+  if (!diagnostic?.code) return;
+  const payload = { product: 'Tegin', version: api.runtime.getManifest().version, browser: browserLabel(), ...diagnostic };
+  $('#key-diagnostic-data').textContent = JSON.stringify(payload, null, 2);
+  $('#key-diagnostic').hidden = false;
+}
+$('#copy-diagnostic').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText($('#key-diagnostic-data').textContent); $('#copy-diagnostic').textContent = 'Скопировано'; }
+  catch { $('#copy-diagnostic').textContent = 'Выделите текст вручную'; }
+  setTimeout(() => { $('#copy-diagnostic').textContent = 'Скопировать'; }, 2000);
+});
 function startWorker(current, handler) {
   worker = new Worker(api.runtime.getURL('crypto/worker.js'));
   worker.onerror = () => { if (current !== generation) return; lock(); report('Не удалось выполнить локальную криптографическую операцию.', true); };
   worker.onmessage = async ({ data }) => {
     if (current !== generation || finished) return;
     try {
-      if (data.kind === 'error') { lock(); if (data.certificate) showCertificate(data.certificate, true); report(data.message, true); return; }
+      if (data.kind === 'error') { lock(); if (data.certificate) showCertificate(data.certificate, true); showDiagnostic(data.diagnostic); report(data.message, true); return; }
       await handler(data);
     } catch (error) { lock(); report(error.message, true); }
   };

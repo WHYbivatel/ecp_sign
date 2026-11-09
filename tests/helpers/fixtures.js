@@ -8,20 +8,52 @@ import GostSign from '../../extension/vendor/gost/sign.cjs';
 import GostDigest from '../../extension/vendor/gost/digest.cjs';
 
 export const PASSWORD = 'public-test-password';
-export function rsaFixture({ purpose } = {}) {
+// OpenSSL pkcs12 -export options for each protection profile under test.
+export const OPENSSL_PROFILES = {
+  default: [],
+  legacy: ['-legacy'],
+  'pbes2-key-pbe-certs': ['-keypbe', 'AES-256-CBC', '-certpbe', 'PBE-SHA1-3DES'],
+  'pbe-3des-sha1-mac': ['-keypbe', 'PBE-SHA1-3DES', '-certpbe', 'PBE-SHA1-3DES', '-macalg', 'sha1'],
+  nomac: ['-nomac']
+};
+// Passwords travel to OpenSSL through the environment to keep spaces and Unicode exact.
+export const opensslPassword = password => ({ stdio: 'pipe', env: { ...process.env, TEGIN_TEST_P12_PASSWORD: password } });
+
+export function rsaFixture({ purpose, password = PASSWORD, profile = 'default', subject = '/CN=Tegin disposable test', keySpec = 'rsa:2048' } = {}) {
   if (purpose && !['clientAuth', 'emailProtection'].includes(purpose)) throw new Error('Unsupported fixture purpose');
+  if (!OPENSSL_PROFILES[profile]) throw new Error('Unsupported fixture profile');
   const folder = mkdtempSync(join(tmpdir(), 'ncabrowser-rsa-'));
   try {
-    execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(folder, 'key.pem'),
-      '-out', join(folder, 'cert.pem'), '-days', '2', '-subj', '/CN=Tegin disposable test', ...(purpose ? ['-addext', 'extendedKeyUsage=' + purpose] : [])], { stdio: 'ignore' });
-    execFileSync('openssl', ['pkcs12', '-export', '-inkey', join(folder, 'key.pem'), '-in', join(folder, 'cert.pem'),
-      '-out', join(folder, 'key.p12'), '-passout', `pass:${PASSWORD}`], { stdio: 'ignore' });
+    const keyArgs = keySpec.startsWith('ec:') ? ['-newkey', 'ec', '-pkeyopt', `ec_paramgen_curve:${keySpec.slice(3)}`] : ['-newkey', keySpec];
+    execFileSync('openssl', ['req', '-x509', ...keyArgs, '-nodes', '-keyout', join(folder, 'key.pem'), '-utf8',
+      '-out', join(folder, 'cert.pem'), '-days', '2', '-subj', subject, ...(purpose ? ['-addext', 'extendedKeyUsage=' + purpose] : [])], { stdio: 'ignore' });
+    execFileSync('openssl', ['pkcs12', '-export', ...OPENSSL_PROFILES[profile], '-inkey', join(folder, 'key.pem'), '-in', join(folder, 'cert.pem'),
+      '-out', join(folder, 'key.p12'), '-passout', 'env:TEGIN_TEST_P12_PASSWORD'], opensslPassword(password));
     return { container: new Uint8Array(readFileSync(join(folder, 'key.p12'))),
       certificate: readFileSync(join(folder, 'cert.pem'), 'utf8'), publicKey: readFileSync(join(folder, 'key.pem'), 'utf8') };
   } finally { rmSync(folder, { recursive: true, force: true }); }
 }
 
-export function gostFixture(family = '512', { eku = [], keyUsage = false } = {}) {
+// Assembles a PFX from prepared SafeBags. The MAC key uses the RFC 7292 BMPString
+// password, independently of how the bags were encrypted.
+export function pkcs12Container(safeBags, password = PASSWORD, { macIterations = 2048 } = {}) {
+  const authSafe = der(seq(seq(oid(O.data), context(0, [octet(der(seq(...safeBags)))]))));
+  const salt = forge.random.getBytesSync(16);
+  const key = forge.pkcs12.generateKey(password, forge.util.createBuffer(salt), 3, macIterations, 20).getBytes();
+  const mac = forge.hmac.create(); mac.start('sha1', key); mac.update(authSafe);
+  const macData = seq(seq(algorithm(forge.pki.oids.sha1), octet(mac.digest().getBytes())), octet(salt), A.create(0, A.Type.INTEGER, false, integerBytes(macIterations)));
+  return bytes(der(seq(integer(3), seq(oid(O.data), context(0, [octet(authSafe)])), macData)));
+}
+export function integerBytes(value) {
+  let hex = value.toString(16);
+  if (hex.length % 2) hex = '0' + hex;
+  if (parseInt(hex.slice(0, 2), 16) & 128) hex = '00' + hex;
+  return forge.util.hexToBytes(hex);
+}
+export const shroudedKeyBag = encrypted => seq(oid(forge.pki.oids.pkcs8ShroudedKeyBag), context(0, [encrypted]));
+export const certificateBag = certificateDer => seq(oid(forge.pki.oids.certBag), context(0, [seq(oid(forge.pki.oids.x509Certificate), context(0, [octet(certificateDer)]))]));
+
+export function gostFixture(family = '512', { eku = [], keyUsage = false, password = PASSWORD, keyEncryption = '3des' } = {}) {
   const scheme = family === '2004' ? { version: 2001, length: 256, namedCurve: 'S-256-A', oid: O.gost2004, curveOid: '1.2.398.3.10.1.1.1.1.1', hash: O.hash2004, sig: O.sig2004 } : family === '256' ? { version: 2012, length: 256, curve: nca256, oid: O.gost256, curveOid: '1.2.398.3.10.1.1.2.1.1', hash: O.hash256, sig: O.sig256 } : { version: 2012, length: 512, namedCurve: 'T-512-A', oid: O.gost512, curveOid: '1.2.398.3.10.1.1.2.2.1', hash: O.hash512, sig: O.sig512 };
   const engine = new GostSign(scheme);
   const pair = engine.generateKey();
@@ -37,15 +69,11 @@ export function gostFixture(family = '512', { eku = [], keyUsage = false } = {})
   const hash = new GostDigest({ version: scheme.version === 2001 ? 1994 : 2012, length: scheme.length, sBox: 'D-TEST' }).digest(bytes(der(tbs)));
   const signature = new Uint8Array(engine.sign(pair.privateKey, hash));
   const cert = seq(tbs, algorithm(scheme.sig), A.create(0, A.Type.BITSTRING, false, '\0' + binary(signature)));
-  const encrypted = forge.pki.encryptPrivateKeyInfo(pkcs8, PASSWORD, { algorithm: '3des', count: 2048 });
-  const safe = seq(seq(oid(forge.pki.oids.pkcs8ShroudedKeyBag), context(0, [encrypted])),
-    seq(oid(forge.pki.oids.certBag), context(0, [seq(oid(forge.pki.oids.x509Certificate), context(0, [octet(der(cert))]))])));
-  const authSafe = der(seq(seq(oid(O.data), context(0, [octet(der(safe))]))));
-  const salt = forge.random.getBytesSync(16);
-  const key = forge.pkcs12.generateKey(PASSWORD, forge.util.createBuffer(salt), 3, 2048, 20).getBytes();
-  const mac = forge.hmac.create(); mac.start('sha1', key); mac.update(authSafe);
-  const macData = seq(seq(algorithm(forge.pki.oids.sha1), octet(mac.digest().getBytes())), octet(salt), A.create(0, A.Type.INTEGER, false, '\x08\x00'));
-  const container = bytes(der(seq(integer(3), seq(oid(O.data), context(0, [octet(authSafe)])), macData)));
+  // PKCS#12 3DES PBE takes the BMPString password; PBES2 takes UTF-8 octets (RFC 8018, OpenSSL, Java).
+  const encrypted = keyEncryption === 'pbes2'
+    ? forge.pki.encryptPrivateKeyInfo(pkcs8, forge.util.encodeUtf8(password), { algorithm: 'aes256', prfAlgorithm: 'sha256', count: 2048 })
+    : forge.pki.encryptPrivateKeyInfo(pkcs8, password, { algorithm: '3des', count: 2048 });
+  const container = pkcs12Container([shroudedKeyBag(encrypted), certificateBag(der(cert))], password);
   new Uint8Array(pair.privateKey).fill(0);
   return { container, certificate: forge.util.encode64(der(cert)), publicKey: new Uint8Array(pair.publicKey) };
 }
