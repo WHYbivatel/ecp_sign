@@ -24,7 +24,8 @@
     "https://*.kz/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
-    "http://tsp.pki.gov.kz/*"
+    "http://tsp.pki.gov.kz/*",
+    "http://ocsp.pki.gov.kz/*"
   ],
   "optional_host_permissions": [
     "https://*/*"
@@ -57,7 +58,7 @@
     }
   ],
   "content_security_policy": {
-    "extension_pages": "default-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self'; img-src 'self'; connect-src http://tsp.pki.gov.kz; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
+    "extension_pages": "default-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self'; img-src 'self'; connect-src http://tsp.pki.gov.kz http://ocsp.pki.gov.kz https://crl.pki.gov.kz https://crl1.pki.gov.kz https://crl.root.gov.kz; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
   },
   "icons": {
     "16": "assets/icon-16.png",

@@ -24,7 +24,9 @@ export async function signCms(signer, data, { encapsulate = true, cades = false,
   if (timestamp) {
     const stamp = await timestampRequester(signature);
     signerInfo.value.push(context(1, set(seq(oid('1.2.840.113549.1.9.16.2.14'), set(stamp.token))).value));
-    onTimestamp?.({ time: stamp.time, authority: stamp.authority, revocation: stamp.revocation });
+    const summary = { time: stamp.time, authority: stamp.authority, revocation: stamp.revocation };
+    Object.defineProperty(summary, 'certificates', { value: stamp.certificates, enumerable: false });
+    onTimestamp?.(summary);
   }
   const content = seq(oid(O.data), ...(encapsulate ? [context(0, [octet(data)])] : []));
   const signedData = seq(integer(1), set(digestAlgorithm), content,

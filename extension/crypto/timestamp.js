@@ -31,7 +31,9 @@ export async function verifyTimestampResponse(raw, request, { anchors, now = Dat
   if (request.nonce && (!nonce || !equalBytes(bytes(nonce.value), request.nonce))) throw new Error('Служба вернула неверный nonce метки времени.');
   const time = A.generalizedTimeToDate(info[4].value).getTime();
   if (!Number.isFinite(time) || (historical ? time - now > 10 * 60 * 1000 : Math.abs(time - now) > 10 * 60 * 1000)) throw new Error('Время ответа НУЦ не соответствует текущей операции.');
-  return { token, time: new Date(time).toISOString(), authority: signer.certificate.summary.name, revocation: 'not-checked' };
+  const result = { token, time: new Date(time).toISOString(), authority: signer.certificate.summary.name, revocation: 'not-checked' };
+  Object.defineProperty(result, 'certificates', { value: signer.trust.certificates, enumerable: false });
+  return result;
 }
 
 export async function verifyEmbeddedTimestamp(token, signature) {

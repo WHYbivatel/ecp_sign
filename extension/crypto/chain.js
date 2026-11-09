@@ -42,8 +42,13 @@ export async function verifyChain(leaf, additional = [], { anchors, now = Date.n
   }
   try {
     const path = await walk(leaf.certificate ? leaf : certificateInfo(leaf), [], 0);
-    if (path) return { trusted: true, revocation: 'not-checked', reason: 'Цепочка доверия проверена локально.',
-      path: await Promise.all(path.map(async info => ({ name: info.summary.name, fingerprint: await fingerprint(info) }))) };
+    if (path) {
+      const result = { trusted: true, revocation: 'not-checked', reason: 'Цепочка доверия проверена локально.',
+        path: await Promise.all(path.map(async info => ({ name: info.summary.name, fingerprint: await fingerprint(info) }))) };
+      // Parsed certificates for revocation checks; non-enumerable, so postMessage never copies them.
+      Object.defineProperty(result, 'certificates', { value: path, enumerable: false });
+      return result;
+    }
   } catch { failure = 'Не удалось проверить алгоритм или структуру цепочки.'; }
   return { trusted: false, revocation: 'not-checked', reason: failure, path: [] };
 }

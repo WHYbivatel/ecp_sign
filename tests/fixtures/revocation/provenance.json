@@ -1,0 +1,32 @@
+{
+  "source": "http://ocsp.pki.gov.kz/ and https://crl.root.gov.kz/, see docs/certificate-revocation.md",
+  "capturedAt": "2026-11-09T10:57:52.576Z",
+  "files": {
+    "ocsp-tsa-good": {
+      "issuer": "nca_gost_2022",
+      "status": "good",
+      "producedAt": "2026-11-09T10:57:52.000Z",
+      "nonce": "8c228fb6a6c7f092860713cb8f594e96"
+    },
+    "ocsp-rsa-not-issued": {
+      "issuer": "nca_rsa_2022",
+      "status": "unknown",
+      "detail": "not-issued",
+      "producedAt": "2026-11-09T10:57:53.000Z"
+    },
+    "ocsp-gost-not-issued": {
+      "issuer": "nca_gost_2022",
+      "status": "unknown",
+      "detail": "not-issued",
+      "producedAt": "2026-11-09T10:57:53.000Z"
+    },
+    "root-rsa2020.crl": {
+      "issuer": "root_rsa_2020",
+      "bytes": 842
+    },
+    "root-gost2015_2022.crl": {
+      "issuer": "root_gost_2022",
+      "bytes": 471
+    }
+  }
+}
