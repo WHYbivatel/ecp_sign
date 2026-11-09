@@ -11,6 +11,7 @@ import { verifyCms } from '../extension/crypto/cms-verify.js';
 import { forge, oid, der } from '../extension/crypto/encoding.js';
 import { SignedXml } from 'xml-crypto';
 import { DOMParser } from '@xmldom/xmldom';
+import { PDFDocument } from 'pdf-lib';
 
 const folder = mkdtempSync(join(tmpdir(), 'ncabrowser-e2e-'));
 const extension = resolve('dist/chromium');
@@ -409,6 +410,68 @@ try {
   await tool.locator('#verify-submit').click(); await tool.locator('#status[data-error]').waitFor();
   assert.equal(await tool.locator('#result-screen').isVisible(), false);
   console.log('PASS: detecting attached content never marks a damaged signature as valid');
+
+  const pdfTool = await context.newPage();
+  await pdfTool.goto(`chrome-extension://${extensionId}/signing/approve.html`);
+  const pdfSource = await PDFDocument.create(); pdfSource.addPage().drawText('Tegin synthetic PDF for PAdES');
+  const pdf = Buffer.from(await pdfSource.save());
+  const choosePades = async (name, buffer) => {
+    if (!await pdfTool.locator('#advanced-settings').evaluate(node => node.open)) await pdfTool.locator('#advanced-settings summary').click();
+    if (await pdfTool.locator('#format').inputValue() !== 'pades') await pdfTool.locator('#format').selectOption('pades');
+    await pdfTool.locator('#document').setInputFiles({ name, mimeType: 'application/pdf', buffer });
+  };
+  await pdfTool.locator('#document').setInputFiles({ name: 'contract.pdf', mimeType: 'application/pdf', buffer: pdf });
+  await pdfTool.locator('#format-help').filter({ hasText: 'PAdES-B-B' }).waitFor();
+  await choosePades('contract.pdf', pdf);
+  await pdfTool.locator('#status').filter({ hasText: 'PDF готов к подписи' }).waitFor();
+  assert.match(await pdfTool.locator('#operation').textContent(), /PAdES-B-B/);
+  assert.match(await pdfTool.locator('#data-description').textContent(), /встроена в PDF \(1 стр\.\)/);
+  await pdfTool.locator('#key-file').setInputFiles({ name: 'test.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(fixture.container) });
+  await pdfTool.locator('#password').fill(PASSWORD); await pdfTool.locator('#unlock').click();
+  await pdfTool.locator('#certificate:not([hidden])').waitFor();
+  await pdfTool.locator('#approve').click();
+  await pdfTool.locator('#result-title').filter({ hasText: 'PDF подписан' }).waitFor();
+  assert.equal(await pdfTool.locator('#download-label').textContent(), 'Скачать подписанный PDF');
+  assert.equal(await pdfTool.locator('#verify-created').isVisible(), false);
+  const pdfDownload = pdfTool.waitForEvent('download'); await pdfTool.locator('#download').click();
+  const signedPdfFile = await pdfDownload;
+  assert.equal(signedPdfFile.suggestedFilename(), 'contract.signed.pdf');
+  const signedPdfPath = join(folder, 'contract.signed.pdf'); await signedPdfFile.saveAs(signedPdfPath);
+  const signedPdf = readFileSync(signedPdfPath);
+  const pdfText = signedPdf.toString('latin1');
+  assert.match(pdfText, /\/SubFilter \/ETSI\.CAdES\.detached/);
+  const [, , first, second, rest] = /\/ByteRange \[(\d+) (\d+) (\d+) (\d+) *\]/.exec(pdfText).map(Number);
+  assert.equal(second + rest, signedPdf.length);
+  const contents = Buffer.from(pdfText.slice(first + 1, second - 1), 'hex');
+  const lengthOctets = contents[1] & 0x7f; let cmsLength = 0;
+  for (let index = 0; index < lengthOctets; index++) cmsLength = cmsLength * 256 + contents[2 + index];
+  writeFileSync(join(folder, 'pades.der'), contents.subarray(0, 2 + lengthOctets + cmsLength));
+  writeFileSync(join(folder, 'pades-covered'), Buffer.concat([signedPdf.subarray(0, first), signedPdf.subarray(second)]));
+  execFileSync('openssl', ['cms', '-verify', '-binary', '-inform', 'DER', '-in', join(folder, 'pades.der'), '-content', join(folder, 'pades-covered'),
+    '-CAfile', join(folder, 'cert.pem'), '-purpose', 'any', '-out', '/dev/null'], { stdio: 'pipe' });
+  console.log('PASS: local PAdES-B-B: format choice, PDF pre-check, approval, .signed.pdf download; embedded CMS over ByteRange verified by OpenSSL');
+  if (process.env.DSS_VALIDATOR) {
+    const [dssResult] = JSON.parse(execFileSync('java', ['-cp', `${process.env.DSS_VALIDATOR}/classes:${process.env.DSS_VALIDATOR}/lib/*`, 'Validate', signedPdfPath, join(folder, 'cert.pem')], { encoding: 'utf8' })).signatures;
+    const [hankoResult] = JSON.parse(execFileSync('python3', [resolve('tests/independent_pades.py'), 'validate', signedPdfPath, join(folder, 'cert.pem')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).signatures;
+    assert.equal(dssResult.indication, 'TOTAL_PASSED', JSON.stringify(dssResult)); assert.equal(dssResult.format, 'PAdES-BASELINE-B');
+    assert.ok(hankoResult.bottomLine && hankoResult.coverage === 'ENTIRE_FILE' && hankoResult.modificationLevel === 'NONE' && hankoResult.adesBasic === 'PASSED', JSON.stringify(hankoResult));
+    console.log('PASS: PDF signed in the browser worker: EU DSS TOTAL_PASSED PAdES-BASELINE-B, pyHanko ENTIRE_FILE without modifications');
+  }
+
+  await pdfTool.locator('#again').click();
+  await choosePades('contract.signed.pdf', signedPdf);
+  await pdfTool.locator('#status[data-error]').filter({ hasText: 'уже содержит электронную подпись' }).waitFor();
+  assert.equal(await pdfTool.locator('#unlock').isDisabled(), true);
+  await choosePades('notes.txt', Buffer.from('not a pdf'));
+  await pdfTool.locator('#status[data-error]').filter({ hasText: 'только для PDF' }).waitFor();
+  // The key is chosen while the PDF pre-check may still run: the check must not be cancelled.
+  await choosePades('contract.pdf', pdf);
+  await pdfTool.locator('#key-file').setInputFiles({ name: 'gost.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(gost.container) });
+  await pdfTool.locator('#password').fill(PASSWORD); await pdfTool.locator('#unlock').click();
+  await pdfTool.locator('#status[data-error]').filter({ hasText: 'только для ключей RSA' }).waitFor();
+  assert.equal(await pdfTool.locator('#approve').isDisabled(), true);
+  await pdfTool.close();
+  console.log('PASS: PAdES refuses an already signed PDF, a non-PDF file and a GOST key with explicit messages');
 
   for (const width of [1280, 870, 400]) {
     await tool.locator('#nav-verify').click(); await tool.setViewportSize({ width, height: 900 });

@@ -8,11 +8,14 @@ let verifyMode = !id && new URLSearchParams(location.search).get('mode') === 've
 const DOC_LIMIT = 2 * 1024 * 1024, SIGNATURE_LIMIT = 8 * 1024 * 1024;
 let request, worker, selectedCertificate, signatureFile, localName = '', generation = 0, previewGeneration = 0;
 let finished = false, busy = false, downloadUrl, deadline = Date.now() + 180000;
-let signatureInfo, createdSignature, createdName = '', viewAnimation;
+let signatureInfo, createdSignature, createdName = '', viewAnimation, pdfInspector, documentRevision = 0;
 const status = $('#status');
 const sizeLabel = count => count < 1024 ? `${count} Б` : `${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(count / 1024)} КБ`;
 const hex = value => [...value].map(byte => byte.toString(16).padStart(2, '0')).join('');
 const dateTime = value => new Date(value).toLocaleString('ru-RU');
+const isPdf = data => new TextDecoder('latin1').decode(data.subarray(0, 1024)).includes('%PDF-');
+const FORMAT_HELP = 'Документ будет сохранён вместе с подписью (.p7s).';
+const PADES_HELP = 'Подпись будет встроена в PDF (PAdES-B-B). Tegin сохранит новый файл .signed.pdf; зашифрованные и уже подписанные PDF не подписываются.';
 
 const REVOCATION_LABELS = { good: 'Не отозван по актуальным данным', revoked: 'Отозван', unknown: 'Статус неизвестен', 'not-checked': 'Не проверялся', unavailable: 'Проверка недоступна' };
 const REVOCATION_SOURCES = { ocsp: 'OCSP НУЦ', crl: 'список отзыва (CRL)', 'crl+delta': 'список отзыва (CRL + delta)' };
@@ -115,10 +118,11 @@ async function showData() {
   $('#operation-details').open = !service && !info;
   $('#operation-details-label').textContent = service || info ? 'Подробности' : 'Просмотр документа';
   if (service) { $('#title').textContent = service.title; $('#subtitle').textContent = 'Проверьте адрес сайта и выберите ключ ЭЦП.'; $('#approve-label').textContent = service.button; }
-  const label = request.timestamp ? 'CAdES-T' : request.cades ? 'CAdES-BES' : request.format.toUpperCase();
+  const label = request.format === 'pades' ? 'PAdES-B-B' : request.timestamp ? 'CAdES-T' : request.cades ? 'CAdES-BES' : request.format.toUpperCase();
   $('#operation').textContent = service ? 'Подтверждение' : info ? 'Сведения о сертификате' : `${label} · ${request.digested ? 'хеш документа' : request.documents.length + ' док.'}`;
   $('#data-description').textContent = info ? 'Сайт получит публичный сертификат. Закрытый ключ не передаётся.' : request.digested ? 'Сайт передал только хеш. Сам документ недоступен для просмотра. Подтверждая операцию, вы подписываете этот хеш.' : 'Проверьте документ: подпись будет создана для переданных данных.';
   if (service) $('#data-description').textContent = service.description;
+  if (request.format === 'pades') $('#data-description').textContent = `Подпись будет встроена в PDF (${request.pages} стр.). Tegin сохранит новый файл с подписью, исходный файл не изменится.`;
   $('#footer-note').lastChild.textContent = request.digested ? 'Подтверждение подписи хеша' : 'Подпись только с вашего согласия';
   if (info) { $('#preview').textContent = 'Для этой операции документ не требуется.'; $('#source').textContent = 'Публичные сведения о выбранном сертификате.'; return; }
   const previews = [], sources = []; let total = 0; const hashes = [];
@@ -148,7 +152,21 @@ async function showData() {
   $('#document-hash').textContent = hashes.join('\n'); $('#document-meta').hidden = false;
 }
 
+// The PDF pre-check follows the selected document, not the key: choosing a key must not cancel it.
+function inspectPdfFile(document) {
+  pdfInspector?.terminate();
+  const inspector = pdfInspector = new Worker(api.runtime.getURL('crypto/worker.js'));
+  return new Promise((resolve, reject) => {
+    const done = () => { inspector.terminate(); if (pdfInspector === inspector) pdfInspector = null; };
+    inspector.onmessage = ({ data }) => { done(); if (data.kind === 'pdf-inspected') resolve(data); else reject(new Error(data.message || 'Не удалось проверить PDF.')); };
+    inspector.onerror = () => { done(); reject(new Error('Не удалось проверить PDF.')); };
+    inspector.postMessage({ kind: 'inspect-pdf', document }, [document]);
+  });
+}
+function dropDocument() { documentRevision++; pdfInspector?.terminate(); pdfInspector = null; }
+
 async function localDocument(autoVerify = false) {
+  dropDocument(); const revision = documentRevision;
   lock(); request = null; signatureFile?.fill(0); signatureFile = null; signatureInfo = null;
   $('#original').value = ''; $('#original-controls').hidden = true;
   const file = $('#document').files[0];
@@ -157,10 +175,10 @@ async function localDocument(autoVerify = false) {
   $('#document-label').textContent = file.name; $('#document-hint').textContent = `${sizeLabel(file.size)} · нажмите, чтобы заменить`;
   const limit = verifyMode ? SIGNATURE_LIMIT : DOC_LIMIT;
   if (file.size > limit) throw new Error(`Файл превышает ${limit / 1024 / 1024} МБ.`);
-  const current = generation;
   const buffer = new Uint8Array(await file.arrayBuffer());
+  const current = generation;
   try {
-    if (current !== generation) return;
+    if (revision !== documentRevision) return;
     if (verifyMode) {
       signatureFile = buffer.slice();
       $('#preview').textContent = 'Определяем, находится ли документ внутри подписи…';
@@ -185,6 +203,19 @@ async function localDocument(autoVerify = false) {
       worker.postMessage({ kind: 'inspect', signature }, [signature]);
     } else {
       const format = $('#format').value;
+      const pdf = isPdf(buffer);
+      $('#format-help').textContent = format === 'pades' ? PADES_HELP : pdf ? 'Документ будет сохранён вместе с подписью (.p7s). Для PDF доступна подпись внутри файла: PAdES-B-B в дополнительных настройках.' : FORMAT_HELP;
+      if (format === 'pades') {
+        if (!pdf) throw new Error('PAdES-B-B доступен только для PDF-документов. Выберите PDF или другой формат.');
+        const documents = [base64(buffer)];
+        report('Проверяем PDF…');
+        const inspected = await inspectPdfFile(buffer.slice().buffer);
+        if (revision !== documentRevision) return;
+        request = { operation: 'sign', format: 'pades', documents, decode: true, encapsulate: false, cades: false, timestamp: false, pages: inspected.pages };
+        await showData();
+        report($('#key-file').files[0] ? 'PDF готов к подписи.' : 'PDF готов к подписи. Выберите ключ ЭЦП.'); updateControls();
+        return;
+      }
       request = { operation: 'sign', format: format === 'xml' ? 'xml' : 'cms',
         documents: [format === 'xml' ? new TextDecoder('utf-8', { fatal: true }).decode(buffer) : base64(buffer)],
         decode: format !== 'xml', encapsulate: !format.endsWith('-detached'), cades: format.startsWith('cades'), timestamp: format === 'cades-t' };
@@ -272,7 +303,7 @@ function animateView(element) {
   viewAnimation?.cancel(); viewAnimation = null;
   if (!matchMedia('(prefers-reduced-motion: reduce)').matches) viewAnimation = element.animate([{ opacity: .6 }, { opacity: 1 }], { duration: 170, easing: 'ease-out' });
 }
-function resultScreen({ title, description, details, download, filename, warning = false }) {
+function resultScreen({ title, description, details, download, filename, downloadLabel, warning = false }) {
   finished = true; lock(); $('#key-file').value = '';
   $('#workspace').hidden = true; $('#result-screen').hidden = false; $('.approval-footer').hidden = true;
   $('#result-title').textContent = title; $('#result-description').textContent = description;
@@ -282,7 +313,7 @@ function resultScreen({ title, description, details, download, filename, warning
   $('#download').hidden = !download;
   if (download) {
     downloadUrl = URL.createObjectURL(download); $('#download').href = downloadUrl; $('#download').download = filename;
-    $('#download-label').textContent = verifyMode ? 'Скачать подписанный документ' : 'Скачать подпись';
+    $('#download-label').textContent = downloadLabel || (verifyMode ? 'Скачать подписанный документ' : 'Скачать подпись');
   }
   animateView($('#result-screen'));
   $('#verify-created').hidden = true;
@@ -308,16 +339,18 @@ $('#key-form').addEventListener('submit', async event => {
           resultScreen({ title: 'Подпись передана сайту', description: 'Операция завершена. Можно продолжить работу на сайте.', details: `${certificate.name}\nСтатус отзыва: ${REVOCATION_LABELS[certificate.trust?.revocation?.state || 'not-checked'].toLowerCase()}\n${request.timestamp ? 'Метка времени НУЦ проверена, сертификат службы меток не отозван.' : 'Без метки времени.'}` });
           setTimeout(() => window.close(), 1200);
         } else {
-          const xml = request.format === 'xml';
+          const xml = request.format === 'xml', pades = request.format === 'pades';
           const value = xml ? data.result[0] : unbase64(data.result[0]);
           const stamp = data.timestamps?.[0];
-          resultScreen({ title: 'Документ подписан', description: 'Сохраните результат на своё устройство.',
-            details: `${localName}\n${certificate.name}\nСтатус отзыва: ${REVOCATION_LABELS[certificate.trust?.revocation?.state || 'not-checked'].toLowerCase()}\n${stamp ? 'Метка НУЦ: ' + new Date(stamp.time).toLocaleString('ru-RU') : 'Подпись создана локально, без метки времени.'}`,
-            download: new Blob([value], { type: xml ? 'application/xml' : 'application/pkcs7-mime' }),
-            filename: (localName || 'document').replace(/[\\/]/g, '_') + (xml ? '.signed.xml' : '.p7s') });
+          const name = (localName || 'document').replace(/[\\/]/g, '_');
+          resultScreen({ title: pades ? 'PDF подписан' : 'Документ подписан', description: 'Сохраните результат на своё устройство.',
+            details: `${localName}${pades ? '\nPAdES-B-B · подпись внутри PDF' : ''}\n${certificate.name}\nСтатус отзыва: ${REVOCATION_LABELS[certificate.trust?.revocation?.state || 'not-checked'].toLowerCase()}\n${stamp ? 'Метка НУЦ: ' + new Date(stamp.time).toLocaleString('ru-RU') : 'Подпись создана локально, без метки времени.'}`,
+            download: new Blob([value], { type: xml ? 'application/xml' : pades ? 'application/pdf' : 'application/pkcs7-mime' }),
+            filename: pades ? name.replace(/\.pdf$/i, '') + '.signed.pdf' : name + (xml ? '.signed.xml' : '.p7s'),
+            downloadLabel: pades ? 'Скачать подписанный PDF' : undefined });
           if (value instanceof Uint8Array) {
             createdSignature?.fill(0);
-            createdSignature = request.encapsulate ? value.slice() : null;
+            createdSignature = request.encapsulate && !pades ? value.slice() : null;
             createdName = (localName || 'document') + '.p7s';
             $('#verify-created').hidden = !createdSignature;
             value.fill(0);
@@ -385,11 +418,11 @@ $('#cancel').addEventListener('click', async () => {
 });
 function localMode(mode, push = true) {
   if (id) return;
-  verifyMode = mode === 'verify'; finished = false; lock(); previewGeneration++;
+  verifyMode = mode === 'verify'; finished = false; dropDocument(); lock(); previewGeneration++;
   request = null; signatureInfo = null;
   signatureFile?.fill(0); signatureFile = null; createdSignature?.fill(0); createdSignature = null;
   for (const selector of ['#document', '#original', '#key-file']) $(selector).value = '';
-  $('#format').value = 'cms'; $('#advanced-settings').open = false;
+  $('#format').value = 'cms'; $('#advanced-settings').open = false; $('#format-help').textContent = FORMAT_HELP;
   $('#key-name').textContent = 'Выбрать ключ'; $('#key-size').textContent = 'Файл .p12 или .pfx';
   $('#workspace').hidden = false; $('#result-screen').hidden = true; $('.approval-footer').hidden = false;
   $('#local-controls').hidden = false; $('#original-controls').hidden = true; $('#tool-nav').hidden = false;
@@ -438,7 +471,7 @@ $('#verify-created').addEventListener('click', async () => {
   } catch (error) { report(error.message, true); }
   finally { value.fill(0); }
 });
-window.addEventListener('pagehide', () => { lock(); signatureFile?.fill(0); createdSignature?.fill(0); if (downloadUrl) URL.revokeObjectURL(downloadUrl); });
+window.addEventListener('pagehide', () => { dropDocument(); lock(); signatureFile?.fill(0); createdSignature?.fill(0); if (downloadUrl) URL.revokeObjectURL(downloadUrl); });
 setInterval(() => {
   if (finished || Date.now() < deadline) return;
   finished = true; lock(); report('Время операции истекло. Повторите запрос или откройте инструмент заново.', true);
