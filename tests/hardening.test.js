@@ -92,6 +92,24 @@ test('correct CMS from OpenSSL still verifies: BER, attached, detached, CAdES, S
     const info = root.value[1].value[0].value.at(-1).value[0];
     info.value.push(A.create(A.Class.CONTEXT_SPECIFIC, 1, true, [info.value[3].value[0]]));
     assert.deepEqual((await verifyCms(bytes(der(root)))).content, data, 'unsigned attributes are outside the signature');
+    // eContent OCTET STRING: primitive and constructed BER parts must all be UNIVERSAL.
+    const eContent = root => root.value[1].value[0].value[2].value[1];
+    const primitive = parse(sign('-nodetach'));
+    eContent(primitive).value[0].tagClass = A.Class.APPLICATION;
+    await assert.rejects(verifyCms(bytes(der(primitive))), /CMS/, 'application-tagged eContent');
+    assert.throws(() => describeCms(bytes(der(primitive))), /CMS/);
+    const ber = sign('-nodetach', '-stream', '-indef');
+    const nested = parse(ber);
+    const outer = eContent(nested).value[0];
+    assert.equal(outer.constructed, true, 'OpenSSL streams eContent as a constructed OCTET STRING');
+    outer.value = [A.create(0, A.Type.OCTETSTRING, true, outer.value)];
+    assert.deepEqual((await verifyCms(bytes(der(nested)))).content, data, 'nested constructed BER parts');
+    for (const [name, change] of [['application-tagged BER part', root => { eContent(root).value[0].value[0].tagClass = A.Class.APPLICATION; }],
+      ['application-tagged nested BER part', root => { eContent(root).value[0].value[0].value[0].tagClass = A.Class.APPLICATION; }]]) {
+      const root = parse(bytes(der(nested))); change(root);
+      await assert.rejects(verifyCms(bytes(der(root))), /CMS/, name);
+      assert.throws(() => describeCms(bytes(der(root))), /CMS/, name);
+    }
   } finally { rmSync(folder, { recursive: true, force: true }); }
 });
 

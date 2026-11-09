@@ -4,8 +4,9 @@ import { digestForOid, equalBytes, verifySignedBytes } from './verification.js';
 import { verifyChain } from './chain.js';
 
 const CONTENT_TYPE = '1.2.840.113549.1.9.3', MESSAGE_DIGEST = '1.2.840.113549.1.9.4';
+// eContent OCTET STRING; BER may split it into nested parts, each of them universal too.
 function octets(node, depth = 0) {
-  if (depth > 24 || node?.type !== A.Type.OCTETSTRING) throw new Error('Некорректные данные CMS.');
+  if (depth > 24 || node?.tagClass !== A.Class.UNIVERSAL || node.type !== A.Type.OCTETSTRING) throw new Error('Некорректные данные CMS.');
   return typeof node.value === 'string' ? node.value : node.value.map(child => octets(child, depth + 1)).join('');
 }
 const universal = (node, type) => node?.tagClass === A.Class.UNIVERSAL && node.type === type;
