@@ -21,6 +21,30 @@ function checkShape(root) {
   if (!universal(version, A.Type.INTEGER) || !universal(digestAlgorithms, A.Type.SET) || digestAlgorithms.value.some(node => !universal(node, A.Type.SEQUENCE) || !universal(node.value[0], A.Type.OID)) ||
     !universal(encapsulated, A.Type.SEQUENCE) || !universal(encapsulated.value[0], A.Type.OID) || encapsulated.value.length > 2 || (encapsulated.value[1] && !explicit(encapsulated.value[1], 0)) ||
     optional.length > 2 || optional.some((node, index) => node.tagClass !== A.Class.CONTEXT_SPECIFIC || !node.constructed || node.type > 1 || (index && node.type <= optional[index - 1].type))) throw new Error('Некорректная структура CMS.');
+  // CertificateChoices and RevocationInfoChoice: X.509 SEQUENCE or one of their context tags.
+  for (const node of optional) if (node.value.some(item => !universal(item, A.Type.SEQUENCE) && !(item.tagClass === A.Class.CONTEXT_SPECIFIC && item.constructed && (node.type === 0 ? item.type >= 1 && item.type <= 3 : item.type === 1)))) throw new Error('Некорректная структура CMS.');
+  const infos = fields.at(-1);
+  if (!universal(infos, A.Type.SET) || !infos.constructed || !infos.value.length || infos.value.length > 10) throw new Error('Неверный список подписантов CMS.');
+  infos.value.forEach(checkSignerInfo);
+}
+const algorithmIdentifier = node => universal(node, A.Type.SEQUENCE) && node.value.length >= 1 && node.value.length <= 2 && universal(node.value[0], A.Type.OID);
+const attributeSet = (node, tag) => node?.tagClass === A.Class.CONTEXT_SPECIFIC && node.type === tag && node.constructed && node.value.length > 0 &&
+  node.value.every(item => universal(item, A.Type.SEQUENCE) && item.value.length === 2 && universal(item.value[0], A.Type.OID) && universal(item.value[1], A.Type.SET));
+// RFC 5652 5.3: version, sid, digestAlgorithm, [0] signedAttrs, signatureAlgorithm, signature, [1] unsignedAttrs.
+function checkSignerInfo(info) {
+  const fail = () => { throw new Error('Некорректная структура подписанта CMS.'); };
+  if (!universal(info, A.Type.SEQUENCE)) fail();
+  const [version, sid, digestAlgorithm, ...rest] = info.value;
+  const byKey = sid?.tagClass === A.Class.CONTEXT_SPECIFIC && sid.type === 0 && !sid.constructed;
+  const byIssuer = universal(sid, A.Type.SEQUENCE) && sid.value.length === 2 && universal(sid.value[0], A.Type.SEQUENCE) && universal(sid.value[1], A.Type.INTEGER);
+  if (!universal(version, A.Type.INTEGER) || version.value !== (byKey ? '\x03' : '\x01') || !(byKey || byIssuer) || !algorithmIdentifier(digestAlgorithm)) fail();
+  let index = 0;
+  if (rest[index]?.tagClass === A.Class.CONTEXT_SPECIFIC && rest[index].type === 0 && !attributeSet(rest[index++], 0)) fail();
+  if (!algorithmIdentifier(rest[index++])) fail();
+  const signature = rest[index++];
+  if (!universal(signature, A.Type.OCTETSTRING) || signature.constructed) fail();
+  if (rest[index] && !attributeSet(rest[index++], 1)) fail();
+  if (index !== rest.length) fail();
 }
 export function readCms(raw, detached, { allowMissingDocument = false } = {}) {
   if (raw.length > 8 * 1024 * 1024) throw new Error('Подпись превышает 8 МБ.');
@@ -36,7 +60,6 @@ export function readCms(raw, detached, { allowMissingDocument = false } = {}) {
   const certificateSet = signedData.value.find((node, index) => index > 2 && node.tagClass === A.Class.CONTEXT_SPECIFIC && node.type === 0);
   const certificates = (certificateSet?.value || []).filter(node => node.tagClass === 0 && node.type === A.Type.SEQUENCE).map(certificateInfo);
   const infos = signedData.value.at(-1);
-  if (infos.type !== A.Type.SET || !infos.value.length || infos.value.length > 10) throw new Error('Неверный список подписантов CMS.');
   return { root, signedData, infos: infos.value, certificates, content, contentType, attached: Boolean(attached) };
 }
 
@@ -67,7 +90,6 @@ export async function verifyCms(raw, { detached, requireBinding = false, anchors
   const signers = [];
   for (const info of cms.infos) {
     const fields = info.value;
-    if (!universal(info, A.Type.SEQUENCE) || !universal(fields[0], A.Type.INTEGER)) throw new Error('Некорректная структура CMS.');
     const sid = fields[1];
     const matches = cms.certificates.filter(cert => sid.tagClass === A.Class.CONTEXT_SPECIFIC
       ? cert.subjectKeyId === sid.value

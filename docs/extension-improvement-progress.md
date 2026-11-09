@@ -517,13 +517,15 @@ NCA_KALKAN_JARS=/path/kalkancrypt-0.7.8.jar:/path/kalkancrypt_xmldsig-osgi-0.4.j
    сертификат, теперь поля перечислены явно.
 4. `4aa1f09` — найдено фаззингом: CMS с ContentInfo в виде SET, eContent `[1]` или `[2]` и
    чужими тегами у version и digestAlgorithms признавалась действительной. Подписанное
-   содержимое при этом не менялось.
+   содержимое при этом не менялось. После проверки дополнено: класс, форма, порядок и
+   отсутствие лишних полей signerInfos и каждого SignerInfo (RFC 5652 §5.3), версия 1/3 по
+   виду sid, допустимые формы certificates и crls.
 
 ### Проверки
 
 | Проверка | Результат |
 |---|---|
-| `npm test` | 89/89 (было 82: +4 в `hardening.test.js`, +2 в `pkcs12-open.test.js`, +1 в `operation-summary.test.js`) |
+| `npm test` | 90/90 (было 82: +5 в `hardening.test.js`, +2 в `pkcs12-open.test.js`, +1 в `operation-summary.test.js`) |
 | `npm run build` | Успешно |
 | `npm run test:e2e` | 35/35 и 9/9, код выхода 0 |
 | Kalkan 0.7.8 (SHA-256 JAR совпадает с записанным) | PKCS#12 12/12, CMS и XMLDSig 37/37 на `node-forge` 1.4.3 |
