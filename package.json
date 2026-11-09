@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.12",
-    "node-forge": "^1.4.0",
+    "node-forge": "^1.4.3",
     "xml-crypto": "^6.4.0"
   },
   "devDependencies": {
