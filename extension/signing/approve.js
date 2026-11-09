@@ -12,6 +12,35 @@ let signatureInfo, createdSignature, createdName = '', viewAnimation;
 const status = $('#status');
 const sizeLabel = count => count < 1024 ? `${count} Б` : `${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(count / 1024)} КБ`;
 const hex = value => [...value].map(byte => byte.toString(16).padStart(2, '0')).join('');
+const dateTime = value => new Date(value).toLocaleString('ru-RU');
+
+const REVOCATION_LABELS = { good: 'Не отозван по актуальным данным', revoked: 'Отозван', unknown: 'Статус неизвестен', 'not-checked': 'Не проверялся', unavailable: 'Проверка недоступна' };
+const REVOCATION_SOURCES = { ocsp: 'OCSP НУЦ', crl: 'список отзыва (CRL)', 'crl+delta': 'список отзыва (CRL + delta)' };
+const REASONS = { keyCompromise: 'компрометация ключа', cACompromise: 'компрометация УЦ', affiliationChanged: 'изменение сведений', superseded: 'заменён', cessationOfOperation: 'прекращение деятельности', certificateHold: 'приостановлен', privilegeWithdrawn: 'отзыв полномочий', unspecified: 'причина не указана' };
+const revocationBlocks = result => !result || result.state === 'revoked' || (result.required && result.state !== 'good');
+function revocationNote(result) {
+  if (!result) return '';
+  const revoked = result.certificates?.find(entry => entry.state === 'revoked');
+  if (result.state === 'good') return `Проверено ${dateTime(result.checkedAt)} по данным НУЦ для всей цепочки. Статус относится к моменту проверки.`;
+  if (result.state === 'revoked') return `${revoked.role === 'ca' ? 'Сертификат УЦ в цепочке' : 'Сертификат'} отозван${revoked.revocationTime ? ' ' + dateTime(revoked.revocationTime) : ''}${revoked.reason ? ' (' + (REASONS[revoked.reason] || revoked.reason) + ')' : ''}. Операция заблокирована.`;
+  if (result.state === 'unknown') return result.certificates.some(entry => entry.detail === 'not-issued') ? 'НУЦ сообщает, что такой сертификат им не выдавался. Операция заблокирована.' : 'Служба НУЦ не знает этот сертификат. Операция заблокирована.';
+  if (result.state === 'unavailable') return 'Службы НУЦ не ответили или их ответ не прошёл проверку. Это не подтверждает, что сертификат действителен. Повторите позже.';
+  if (result.reason === 'untrusted') return 'Цепочка доверия не подтверждена, поэтому статус отзыва проверить не у кого.';
+  if (result.reason === 'not-requested') return 'Онлайн-проверка отзыва не запрашивалась.';
+  if (result.reason === 'pending') return 'Проверка отзыва не выполнялась: операция остановлена раньше.';
+  return 'Для УЦ этой цепочки нет проверенных адресов служб отзыва. Подтверждайте операцию, только если доверяете этому сертификату.';
+}
+function revocationTechnical(result) {
+  if (!result?.certificates?.length) return REVOCATION_LABELS[result?.state || 'not-checked'];
+  return result.certificates.map(entry => `${entry.name}: ${REVOCATION_LABELS[entry.state]}${entry.source ? ' · ' + REVOCATION_SOURCES[entry.source] : ''}${entry.thisUpdate ? ' · данные от ' + dateTime(entry.thisUpdate) : ''}${entry.code ? ' · ' + entry.code : ''}`).join('\n');
+}
+function historyNote(history) {
+  if (!history) return '';
+  if (history.relation === 'revoked-after-timestamp') return `Сертификат отозван ${dateTime(history.revocationTime)}, позже метки времени ${dateTime(history.timestamp)}: метка подтверждает, что подпись существовала до отзыва.`;
+  if (history.relation === 'revoked-before-timestamp') return `Сертификат отозван ${dateTime(history.revocationTime)}, раньше метки времени ${dateTime(history.timestamp)}: на момент метки он уже был отозван.`;
+  if (history.relation === 'signing-time-unproven') return `Сертификат отозван${history.revocationTime ? ' ' + dateTime(history.revocationTime) : ''}. В подписи нет метки времени, поэтому момент подписания не подтверждён и относительно отзыва не определён.`;
+  return '';
+}
 
 async function message(kind, extra = {}) {
   const reply = await api.runtime.sendMessage({ kind, id, ...extra });
@@ -25,9 +54,9 @@ function report(text = '', error = false) {
 }
 function updateControls() {
   $('#unlock').disabled = busy || finished || !request || !$('#key-file').files[0] || !$('#password').value;
-  $('#approve').disabled = busy || finished || !worker || !selectedCertificate;
+  $('#approve').disabled = busy || finished || !worker || !selectedCertificate || revocationBlocks(selectedCertificate.trust?.revocation);
   $('#verify-submit').disabled = busy || finished || !signatureFile || !signatureInfo;
-  for (const selector of ['#document', '#format', '#key-file', '#password', '#change-key']) $(selector).disabled = busy || finished;
+  for (const selector of ['#document', '#format', '#key-file', '#password', '#change-key', '#check-revocation']) $(selector).disabled = busy || finished;
   $('#original').disabled = busy || finished || !signatureInfo || signatureInfo.attached;
 }
 function lock() {
@@ -198,6 +227,13 @@ function showCertificate(certificate, readOnly = false) {
   $('#trust-note').textContent = trusted ? 'Подпись ключа и срок действия проверены локально.' : 'Ключ соответствует сертификату, но его УЦ не распознан. Подтверждайте операцию, только если доверяете этому сертификату.';
   $('#trust-note').hidden = Boolean(trusted) && !readOnly;
   if (readOnly) $('#trust-note').textContent = 'Причина отказа указана ниже. Подробности сертификата можно раскрыть.';
+  const revocation = certificate.trust?.revocation;
+  const state = revocation?.state || 'not-checked';
+  $('#revocation-state').dataset.state = state;
+  $('#revocation-state').textContent = `Статус отзыва: ${REVOCATION_LABELS[state].toLowerCase()}`;
+  $('#revocation-note').textContent = revocationNote(revocation);
+  $('#revocation-note').hidden = !$('#revocation-note').textContent;
+  $('#cert-revocation').textContent = revocationTechnical(revocation);
   $('#cert-identifier').textContent = [certificate.iin, certificate.bin].filter(Boolean).join(' / ') || 'Не указан';
   $('#cert-serial').textContent = certificate.serialNumber;
   $('#cert-fingerprint').textContent = certificate.fingerprint || '—';
@@ -260,7 +296,7 @@ $('#key-form').addEventListener('submit', async event => {
     if (finished || busy || !request) return;
     const file = $('#key-file').files[0]; if (!file || file.size > 4 * 1024 * 1024) throw new Error('Выберите файл ключа размером до 4 МБ.');
     let password = $('#password').value; if (!password) return;
-    lock(); const current = generation; busy = true; updateControls(); report('Открываем ключ и проверяем сертификат…');
+    lock(); const current = generation; busy = true; updateControls(); report('Открываем ключ, проверяем сертификат и его статус отзыва…');
     if (id) await message('nca:validate');
     container = await file.arrayBuffer(); if (current !== generation || finished) return;
     startWorker(current, async data => {
@@ -269,14 +305,14 @@ $('#key-form').addEventListener('submit', async event => {
         const certificate = selectedCertificate;
         if (id) {
           await message('nca:complete', { result: data.result });
-          resultScreen({ title: 'Подпись передана сайту', description: 'Операция завершена. Можно продолжить работу на сайте.', details: `${certificate.name}\n${request.timestamp ? 'Метка времени НУЦ проверена.' : 'Без метки времени.'}` });
+          resultScreen({ title: 'Подпись передана сайту', description: 'Операция завершена. Можно продолжить работу на сайте.', details: `${certificate.name}\nСтатус отзыва: ${REVOCATION_LABELS[certificate.trust?.revocation?.state || 'not-checked'].toLowerCase()}\n${request.timestamp ? 'Метка времени НУЦ проверена, сертификат службы меток не отозван.' : 'Без метки времени.'}` });
           setTimeout(() => window.close(), 1200);
         } else {
           const xml = request.format === 'xml';
           const value = xml ? data.result[0] : unbase64(data.result[0]);
           const stamp = data.timestamps?.[0];
           resultScreen({ title: 'Документ подписан', description: 'Сохраните результат на своё устройство.',
-            details: `${localName}\n${certificate.name}\n${stamp ? 'Метка НУЦ: ' + new Date(stamp.time).toLocaleString('ru-RU') : 'Подпись создана локально, без метки времени.'}`,
+            details: `${localName}\n${certificate.name}\nСтатус отзыва: ${REVOCATION_LABELS[certificate.trust?.revocation?.state || 'not-checked'].toLowerCase()}\n${stamp ? 'Метка НУЦ: ' + new Date(stamp.time).toLocaleString('ru-RU') : 'Подпись создана локально, без метки времени.'}`,
             download: new Blob([value], { type: xml ? 'application/xml' : 'application/pkcs7-mime' }),
             filename: (localName || 'document').replace(/[\\/]/g, '_') + (xml ? '.signed.xml' : '.p7s') });
           if (value instanceof Uint8Array) {
@@ -322,18 +358,27 @@ async function verifySelected() {
       if (data.kind !== 'verified') return;
       const content = new Uint8Array(data.content);
       const trusted = data.signers.every(signer => signer.trust.trusted);
-      const details = data.signers.map(signer => `${signer.name}\n${signer.algorithm}\n${signer.trust.trusted ? 'Цепочка НУЦ РК подтверждена' : 'Цепочка доверия не подтверждена'}`).join('\n\n');
-      resultScreen({ title: 'Подпись верна', description: 'Содержимое соответствует криптографической подписи.',
-        details: details + '\n\n' + (data.timestamps.length ? `Метка времени: ${new Date(data.timestamps[0].time).toLocaleString('ru-RU')}\n` : '') + 'Статус отзыва сертификатов не проверялся.',
-        warning: !trusted, download: new Blob([content], { type: 'application/octet-stream' }), filename: (localName.replace(/\.(p7s|p7m|cms)$/i, '') || 'signed-document') + ( /\.[a-z0-9]{1,8}$/i.test(localName.replace(/\.(p7s|p7m|cms)$/i, '')) ? '' : '.bin') });
+      const states = [...data.signers.map(signer => signer.trust.revocation), ...data.timestamps.map(stamp => stamp.revocation)].map(result => result?.state || 'not-checked');
+      const revoked = states.includes('revoked');
+      const details = data.signers.map(signer => [signer.name, signer.algorithm, signer.trust.trusted ? 'Цепочка НУЦ РК подтверждена' : 'Цепочка доверия не подтверждена',
+        `Статус отзыва сейчас: ${REVOCATION_LABELS[signer.trust.revocation.state].toLowerCase()}`, historyNote(signer.history) || revocationNote(signer.trust.revocation)].filter(Boolean).join('\n')).join('\n\n');
+      const stamps = data.timestamps.map(stamp => `Метка времени: ${dateTime(stamp.time)}\nСертификат службы меток: ${REVOCATION_LABELS[stamp.revocation.state].toLowerCase()}`).join('\n');
+      resultScreen({ title: revoked ? 'Подпись соответствует документу' : 'Подпись верна',
+        description: revoked ? 'Содержимое соответствует подписи, но сертификат отозван. Сведения о времени отзыва ниже.' : 'Содержимое соответствует криптографической подписи.',
+        details: details + (stamps ? '\n\n' + stamps : '') + (states.some(state => state !== 'good' && state !== 'not-checked') ? '\n\nТекущий статус отзыва сам по себе не определяет действительность подписи в прошлом.'
+          : states.includes('not-checked') && !$('#check-revocation').checked ? '\n\nЧтобы узнать статус отзыва, отметьте «Проверить отзыв онлайн» и проверьте снова.' : ''),
+        warning: !trusted || states.some(state => state !== 'good' && state !== 'not-checked'), download: new Blob([content], { type: 'application/octet-stream' }), filename: (localName.replace(/\.(p7s|p7m|cms)$/i, '') || 'signed-document') + ( /\.[a-z0-9]{1,8}$/i.test(localName.replace(/\.(p7s|p7m|cms)$/i, '')) ? '' : '.bin') });
       content.fill(0);
     });
     const signature = signatureFile.slice().buffer;
-    worker.postMessage({ kind: 'verify', signature, original }, original ? [signature, original] : [signature]); original = null;
+    worker.postMessage({ kind: 'verify', signature, original, checkRevocation: $('#check-revocation').checked }, original ? [signature, original] : [signature]); original = null;
   } catch (error) { lock(); report(error.message, true); }
   finally { if (original?.byteLength) new Uint8Array(original).fill(0); }
 }
-$('#verify-submit').addEventListener('click', verifySelected);
+$('#verify-submit').addEventListener('click', () => verifySelected());
+$('#check-revocation').addEventListener('change', () => {
+  if (verifyMode) $('#footer-note').lastChild.textContent = $('#check-revocation').checked ? 'В НУЦ уйдут только серийные номера сертификатов' : 'Данные не отправляются в сеть';
+});
 $('#cancel').addEventListener('click', async () => {
   finished = true; lock();
   if (id) { await message('nca:cancel').catch(() => {}); window.close(); }
@@ -362,6 +407,7 @@ function localMode(mode, push = true) {
   $('#approve').hidden = verifyMode; $('#verify-submit').hidden = !verifyMode;
   $('#cancel').hidden = true;
   $('#verify-upload-hint').hidden = !verifyMode;
+  $('#check-revocation').checked = false;
   $('#footer-note').lastChild.textContent = verifyMode ? 'Данные не отправляются в сеть' : 'Подпись только с вашего согласия';
   $('.privacy-label').lastChild.textContent = verifyMode ? 'Проверка без передачи файлов' : 'Ваш ключ — только на устройстве';
   $('.security-note p').textContent = verifyMode ? 'Документ и подпись обрабатываются локально. Ключ ЭЦП не требуется.' : 'Закрытый ключ не передаётся сайту. Подпись создаётся в вашем браузере.';

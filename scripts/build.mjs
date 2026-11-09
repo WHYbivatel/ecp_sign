@@ -4,8 +4,14 @@ import { build } from 'esbuild';
 const source = new URL('../extension/', import.meta.url);
 const manifest = JSON.parse(await readFile(new URL('manifest.json', source), 'utf8'));
 const shim = fileURLToPath(new URL('crypto/browser-node-shim.js', source));
+// Test-only: maps synthetic CA fingerprints to the pinned NCA revocation URLs (served by local
+// routes in tests/e2e.mjs). Such a build goes to a separate directory and is marked in its name.
+const testIssuers = process.env.TEGIN_TEST_REVOCATION_ISSUERS ? JSON.stringify(JSON.parse(process.env.TEGIN_TEST_REVOCATION_ISSUERS)) : 'null';
+const root = testIssuers === 'null' ? new URL('../dist/', import.meta.url) : new URL(`file://${process.env.TEGIN_DIST?.replace(/\/?$/, '/')}`);
+if (testIssuers !== 'null' && !process.env.TEGIN_DIST) throw new Error('TEGIN_TEST_REVOCATION_ISSUERS requires TEGIN_DIST outside dist/.');
+if (testIssuers !== 'null') manifest.name += ' (test revocation build)';
 for (const target of ['chromium', 'firefox']) {
-  const destination = new URL(`../dist/${target}/`, import.meta.url);
+  const destination = new URL(`${target}/`, root);
   await rm(destination, { recursive: true, force: true });
   await mkdir(destination, { recursive: true });
   for (const asset of ['index.html', 'styles.css', 'theme.css', 'assets', 'modules/index.html', 'modules/modules.css', 'signing/approve.html', 'signing/approve.css', 'content/inject.js', 'content/bridge.js']) {
@@ -27,7 +33,7 @@ for (const target of ['chromium', 'firefox']) {
       'crypto/worker': fileURLToPath(new URL('crypto/worker.js', source))
     },
     outdir: fileURLToPath(destination), bundle: true, platform: 'browser', format: 'iife', target: 'chrome111',
-    minify: true, legalComments: 'eof', metafile: true,
+    minify: true, legalComments: 'eof', metafile: true, define: { __TEGIN_TEST_REVOCATION_ISSUERS__: testIssuers },
     plugins: [{ name: 'xml-canonicalization-only', setup(plugin) {
       plugin.onResolve({ filter: /^(crypto|util)$/ }, args => {
         if (args.importer.includes('xml-crypto')) return { path: shim };
