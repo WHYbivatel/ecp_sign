@@ -4,8 +4,8 @@ export const BASICS = 'kz.gov.pki.knca.basics';
 // Only explicit, inspected service IDs are routed. Never alias an unknown plugin
 // to commonUtils: its policy or signed attributes may be materially different.
 const definitions = [
-  ['common', 'НУЦ · Common Utils', 'kz.gov.pki.osgi.layer.common', [COMMON], ['XML', 'CMS / CAdES', 'Сведения о сертификате'], 'Целый XML и данные base64; файловые ключи PKCS#12.'],
-  ['basics', 'НУЦ · Basics', 'kz.gov.pki.knca.applet.knca_applet', [BASICS], ['XML', 'CMS / CAdES', 'Raw', 'Пакетная подпись'], 'До 10 документов; метки времени CMS; без аппаратных токенов.'],
+  ['common', 'НУЦ · Common Utils', 'kz.gov.pki.osgi.layer.common', [COMMON], ['XML', 'CMS / CAdES', 'Сведения о сертификате'], 'Целый XML и данные base64; файловые ключи PKCS#12. Тип ключа SIGNATURE/AUTHENTICATION не сужает выбор сертификата.'],
+  ['basics', 'НУЦ · Basics', 'kz.gov.pki.knca.applet.knca_applet', [BASICS], ['XML', 'CMS / CAdES', 'Raw', 'Пакетная подпись'], 'До 10 документов; метки времени CMS; без аппаратных токенов. Формат raw — расширение Tegin, в NCALayer его нет.'],
   ['goszakup', 'Госзакупки · NURSign', 'kz.ecc.NurSignBundle', ['NURSign'], ['XML', 'CMS / CAdES', 'Пакетная подпись'], 'Данные в запросе: xml, multixml, binary, text, multitext. Загрузка по ссылкам, выбор файлов с диска и needHash пока недоступны.'],
   ['samruk', 'Самрук-Казына · ИСЭЗ', 'kz.sapa.eproc.osgi.EprocModule', ['kz.sapa.eproc.osgi.EprocModule'], ['XML'], 'Целый XML без XPath. Для каждой операции нужно выбрать ключ; пароль не кэшируется.'],
   ['qiwi', 'СФД · QIWI', 'kz.qiwi.osgi.SecurityUtils', ['kz.qiwi.osgi.SecurityUtils'], ['XML'], 'signXml и logOut. Подтверждение каждого подписания вместо сохранённого сеанса ключа.'],
@@ -13,7 +13,7 @@ const definitions = [
   ['uchet', 'Uchet.kz', 'kz.uchet.signUtil', ['kz.uchet.signUtil.commonUtils'], ['XML'], 'Только signXml для целого документа. API с путями к ключам и паролями сайта не принимается.'],
   ['metadoc-info', 'MetaDoc · сведения о сертификате', 'kz.metadoc.NCAModule', ['kz.metadoc.ncamodule.knca.commonUtils'], ['Сведения о сертификате'], 'getKeyInfo и changeLocale. Подписание MetaDoc со специальными атрибутами и OCSP ещё не перенесено.']
 ];
-export const modules = definitions.map(([id, name, bundle, services, features, limitations]) => ({ id, name, bundle, services, features, limitations, available: true, vendor: catalog.find(entry => entry.symname === bundle) }));
+export const modules = definitions.map(([id, name, bundle, services, features, limitations]) => ({ id, name, bundle, services, features, limitations, support: 'partial', vendor: catalog.find(entry => entry.symname === bundle) }));
 export const findModule = service => modules.find(module => module.services.includes(service));
 export const DEFAULT_SETTINGS = Object.freeze({ enabled: true, origins: [], xml: true, cms: true, raw: true, timestamp: 'ask', maxBatch: 10 });
 export function validateSettings(value) {
