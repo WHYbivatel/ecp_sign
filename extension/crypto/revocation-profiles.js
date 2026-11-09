@@ -24,9 +24,12 @@ const nca = name => ({
   ocsp: [OCSP_URL],
   crl: [`https://crl.pki.gov.kz/${name}.crl`, `https://crl1.pki.gov.kz/${name}.crl`],
   delta: [`https://crl.pki.gov.kz/${name.replace('nca_', 'nca_d_')}.crl`, `https://crl1.pki.gov.kz/${name.replace('nca_', 'nca_d_')}.crl`],
-  crlLimit: 'crl'
+  crlLimit: 'crl',
+  // Separate complete/delta number sequences; see deltaRelation in crl.js and
+  // https://pki.gov.kz/docs/npa/CERTIFICATION%20PRACTICE_STATEMENT_v3.pdf (2.3).
+  crlNumbering: 'nca'
 });
-const root = file => ({ ocsp: [], crl: [`https://crl.root.gov.kz/${file}`], delta: [], crlLimit: 'rootCrl' });
+const root = file => ({ ocsp: [], crl: [`https://crl.root.gov.kz/${file}`], delta: [], crlLimit: 'rootCrl', crlNumbering: 'rfc5280' });
 
 const pinned = {
   [NCA_RSA_2022]: { name: 'НУЦ РК (RSA) 2022', ...nca('nca_rsa_2022') },

@@ -99,19 +99,59 @@ export function findEntry(crl, serial) {
   return found;
 }
 
-// Complete CRL plus an optional delta CRL that refines it (Rules 500/НҚ p.4(3)).
-export function statusFromCrls(full, delta, serial) {
-  if (delta) {
-    if (!equal(delta.issuer, full.issuer)) throw new RevocationError('CRL_UNSUPPORTED', 'Delta CRL выпущен другим УЦ.');
-    if (compareNumbers(full.number, delta.deltaBase) < 0) throw new RevocationError('CRL_UNSUPPORTED', 'Delta CRL требует более нового полного CRL.');
+// How a delta CRL relates to a complete CRL of the same scope (scoped CRLs are rejected earlier):
+// 'compatible', 'older' (the complete CRL already supersedes it), 'newer' (needs a later complete
+// CRL) or 'conflict'.
+// - 'rfc5280': RFC 5280 5.2.4 (a)-(d); complete and delta CRLs share one number sequence (5.2.3).
+// - 'nca': NCA numbers complete and delta CRLs in separate sequences (complete 1468, delta 63642
+//   with BaseCRLNumber 1468 on 2026-11-09), so condition (d) cannot order them. Its CPS v3 2.3
+//   publishes each delta as the revocations since the latest complete CRL: BaseCRLNumber must equal
+//   the complete CRL's number, and issue times order the lists. Anything else is a conflict.
+export function deltaRelation(full, delta, numbering = 'rfc5280') {
+  if (!equal(delta.issuer, full.issuer) || !equal(delta.authorityKeyId || new Uint8Array(), full.authorityKeyId || new Uint8Array())) return 'conflict';
+  const base = compareNumbers(full.number, delta.deltaBase);
+  if (numbering === 'nca') {
+    if (base === 0) return delta.thisUpdate >= full.thisUpdate ? 'compatible' : 'conflict';
+    if (base > 0) return delta.thisUpdate <= full.thisUpdate ? 'older' : 'conflict';
+    return delta.thisUpdate >= full.thisUpdate ? 'newer' : 'conflict';
   }
+  if (base < 0) return 'newer';
+  return compareNumbers(full.number, delta.number) < 0 ? 'compatible' : 'older';
+}
+
+const later = (a, b, numbering) => numbering === 'nca' ? (a.thisUpdate - b.thisUpdate || compareNumbers(a.number, b.number)) : compareNumbers(a.number, b.number);
+
+// Newest complete CRL among copies (mirrors, cache) and the newest delta that refines it. A delta
+// that needs a later complete CRL or contradicts it wins over compatible ones: it proves that the
+// chosen pair is not the latest data, so statusFromCrls refuses a permissive answer.
+export function selectCrls(fulls, deltas, numbering = 'rfc5280') {
+  const full = fulls.reduce((best, item) => compareNumbers(item.number, best.number) > 0 ? item : best);
+  let compatible = null, blocking = null;
+  for (const delta of deltas) {
+    const relation = deltaRelation(full, delta, numbering);
+    if (relation === 'newer' || relation === 'conflict') blocking ||= delta;
+    else if (relation === 'compatible' && (!compatible || later(delta, compatible, numbering) > 0)) compatible = delta;
+  }
+  return { full, delta: blocking || compatible, settled: !blocking };
+}
+
+// Complete CRL plus an optional delta CRL that refines it (Rules 500/НҚ p.4(3)).
+export function statusFromCrls(full, delta, serial, numbering = 'rfc5280') {
+  const relation = delta ? deltaRelation(full, delta, numbering) : null;
   const base = findEntry(full, serial);
-  const update = delta ? findEntry(delta, serial) : null;
   if (base?.reasonCode === 8) throw new RevocationError('CRL_MALFORMED', 'Полный CRL содержит запись removeFromCRL.');
+  const merged = relation === 'compatible' ? delta : null;
   let entry = base;
-  if (update) entry = update.reasonCode === 8 ? (base?.reasonCode === 6 ? null : base) : update;
-  const result = { source: delta ? 'crl+delta' : 'crl', thisUpdate: new Date(Math.max(full.thisUpdate, delta?.thisUpdate ?? 0)).toISOString(),
-    nextUpdate: new Date(Math.min(full.nextUpdate, delta?.nextUpdate ?? Infinity)).toISOString() };
+  if (relation === 'newer' || relation === 'conflict') {
+    // Later lists can only lift certificateHold (RFC 5280 5.3.1); any other listed revocation stands.
+    if (!base || base.reasonCode === 6) throw new RevocationError('CRL_DELTA_MISMATCH', relation === 'newer' ? 'Delta CRL требует более нового полного CRL.' : 'Полный CRL и delta CRL несовместимы.');
+  } else if (merged) {
+    const update = findEntry(merged, serial);
+    if (update) entry = update.reasonCode === 8 ? (base?.reasonCode === 6 ? null : base) : update;
+  }
+  const nextUpdate = Math.min(full.nextUpdate, merged?.nextUpdate ?? Infinity);
+  const result = { source: merged ? 'crl+delta' : 'crl', thisUpdate: new Date(Math.max(full.thisUpdate, merged?.thisUpdate ?? 0)).toISOString(),
+    nextUpdate: new Date(nextUpdate).toISOString() };
   if (!entry) return { ...result, status: 'good' };
   return { ...result, status: 'revoked', revocationTime: new Date(entry.revocationTime).toISOString(), reason: entry.reason };
 }

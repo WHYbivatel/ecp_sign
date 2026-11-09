@@ -1,6 +1,6 @@
 import { profileFor, ALLOWED_URLS, LIMITS } from './revocation-profiles.js';
 import { buildOcspRequest, verifyOcspResponse, RevocationError, OCSP_LIMITS } from './ocsp.js';
-import { parseCrl, verifyCrl, statusFromCrls } from './crl.js';
+import { parseCrl, verifyCrl, statusFromCrls, deltaRelation, selectCrls } from './crl.js';
 import { bytes } from './encoding.js';
 
 // Per-certificate and overall states. Order is severity for the overall result.
@@ -97,26 +97,34 @@ export class RevocationChecker {
     this.ocspCache = new Map(); this.crls = new Map();
   }
 
-  async crl(urls, issuer, kind, limitName, signal, errors) {
-    for (const url of urls) {
+  async loadCrl(url, issuer, kind, limitName, signal, errors, { cached = true } = {}) {
+    if (cached) {
       const memo = this.crls.get(url);
-      if (memo && memo.crl.nextUpdate >= this.now()) return memo.crl;
-      let cached = null;
-      try { cached = await this.store.get(url); } catch {}
-      if (cached) {
-        try { const crl = await verifyCrl(parseCrl(cached), issuer, { now: this.now(), kind }); this.crls.set(url, { crl }); return crl; }
+      if (memo && memo.crl.nextUpdate > this.now()) return memo.crl;
+      let raw = null;
+      try { raw = await this.store.get(url); } catch {}
+      if (raw) {
+        try { const crl = await verifyCrl(parseCrl(raw), issuer, { now: this.now(), kind }); this.crls.set(url, { crl }); return crl; }
         catch { await this.store.delete(url).catch(() => {}); }
       }
-      try {
-        const raw = await fetchBounded(url, { types: CRL_TYPES, ...limitOf(limitName), signal, fetchImpl: this.fetchImpl });
-        const crl = await verifyCrl(parseCrl(raw), issuer, { now: this.now(), kind });
-        this.crls.set(url, { crl });
-        await this.store.put(url, raw, crl.nextUpdate).catch(() => {});
-        return crl;
-      } catch (error) {
-        if (error.code === 'ABORTED') throw error;
-        errors.push(error.code || 'CRL');
-      }
+    }
+    try {
+      const raw = await fetchBounded(url, { types: CRL_TYPES, ...limitOf(limitName), signal, fetchImpl: this.fetchImpl });
+      const crl = await verifyCrl(parseCrl(raw), issuer, { now: this.now(), kind });
+      this.crls.set(url, { crl });
+      await this.store.put(url, raw, crl.nextUpdate).catch(() => {});
+      return crl;
+    } catch (error) {
+      if (error.code === 'ABORTED') throw error;
+      errors.push(error.code || 'CRL');
+      return null;
+    }
+  }
+
+  async crl(urls, issuer, kind, limitName, signal, errors) {
+    for (const url of urls) {
+      const crl = await this.loadCrl(url, issuer, kind, limitName, signal, errors);
+      if (crl) return crl;
     }
     return null;
   }
@@ -142,17 +150,30 @@ export class RevocationChecker {
 
   async viaCrl(certificate, issuer, profile, signal, errors) {
     if (!profile.crl.length) return null;
+    const numbering = profile.crlNumbering;
     const full = await this.crl(profile.crl, issuer, 'full', profile.crlLimit, signal, errors);
     if (!full) return null;
     const delta = profile.delta.length ? await this.crl(profile.delta, issuer, 'delta', 'delta', signal, errors) : null;
+    let selected = { full, delta };
+    if (delta && deltaRelation(full, delta, numbering) !== 'compatible') {
+      // Cached and mirrored copies can come from different publication cycles: fetch every delta
+      // afresh, then complete CRLs one by one until the newest complete CRL has no later delta.
+      errors.push('CRL_DELTA_MISMATCH');
+      const fulls = [full], deltas = [delta];
+      for (const url of profile.delta) { const fresh = await this.loadCrl(url, issuer, 'delta', 'delta', signal, errors, { cached: false }); if (fresh) deltas.push(fresh); }
+      selected = selectCrls(fulls, deltas, numbering);
+      for (const url of profile.crl) {
+        if (selected.settled && (!selected.delta || deltaRelation(selected.full, selected.delta, numbering) === 'compatible')) break;
+        const fresh = await this.loadCrl(url, issuer, 'full', profile.crlLimit, signal, errors, { cached: false });
+        if (fresh) { fulls.push(fresh); selected = selectCrls(fulls, deltas, numbering); }
+      }
+    }
     try {
-      const serial = Uint8Array.from(certificate.serial.value, char => char.charCodeAt(0));
-      return statusFromCrls(full, delta, serial);
+      return statusFromCrls(selected.full, selected.delta, Uint8Array.from(certificate.serial.value, char => char.charCodeAt(0)), numbering);
     } catch (error) {
+      if (error.code === 'ABORTED') throw error;
       errors.push(error.code || 'CRL');
-      if (!delta) return null;
-      try { return statusFromCrls(full, null, Uint8Array.from(certificate.serial.value, char => char.charCodeAt(0))); }
-      catch (retry) { errors.push(retry.code || 'CRL'); return null; }
+      return null;
     }
   }
 

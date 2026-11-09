@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { buildOcspRequest, verifyOcspResponse } from '../extension/crypto/ocsp.js';
-import { parseCrl, verifyCrl, statusFromCrls } from '../extension/crypto/crl.js';
+import { parseCrl, verifyCrl, statusFromCrls, deltaRelation, selectCrls } from '../extension/crypto/crl.js';
 import { RevocationChecker, memoryStore, fetchBounded, blocks, assessHistory, summarize } from '../extension/crypto/revocation.js';
 import { ALLOWED_URLS, OCSP_URL, profileFor } from '../extension/crypto/revocation-profiles.js';
 import { certificateInfo } from '../extension/crypto/signer.js';
@@ -123,7 +123,80 @@ test('CRL: delta lists refine the complete list, including removeFromCRL', async
   const fresh = await verifyCrl(parseCrl(crl(ca, { number: 12, deltaBase: 10, entries: [{ serial: serialHex(leaf), reason: 1 }] })), ca.info, { kind: 'delta' });
   assert.equal(statusFromCrls(clean, fresh, serialBytes(leaf)).status, 'revoked');
   const ahead = await verifyCrl(parseCrl(crl(ca, { number: 13, deltaBase: 11 })), ca.info, { kind: 'delta' });
-  assert.throws(() => statusFromCrls(clean, ahead, serialBytes(leaf)), { code: 'CRL_UNSUPPORTED' });
+  assert.throws(() => statusFromCrls(clean, ahead, serialBytes(leaf)), { code: 'CRL_DELTA_MISMATCH' });
+});
+
+const minute = 60000;
+const fullList = options => verifyCrl(parseCrl(crl(ca, options)), ca.info);
+const deltaList = options => verifyCrl(parseCrl(crl(ca, options)), ca.info, { kind: 'delta' });
+const hold = () => [{ serial: serialHex(leaf), reason: 6 }];
+const unhold = () => [{ serial: serialHex(leaf), reason: 8 }];
+
+test('CRL: an older delta never lifts a newer certificateHold (RFC 5280 5.2.4 (d))', async () => {
+  // Reproduction from the stage 2 review: both lists are valid and signed by the same CA.
+  const full = await fullList({ number: 20, thisUpdate: Date.now() - minute, entries: hold() });
+  const stale = await deltaList({ number: 11, deltaBase: 10, thisUpdate: Date.now() - 5 * minute, entries: unhold() });
+  for (const numbering of ['rfc5280', 'nca']) {
+    assert.equal(deltaRelation(full, stale, numbering), 'older', numbering);
+    const result = statusFromCrls(full, stale, serialBytes(leaf), numbering);
+    assert.equal(result.status, 'revoked', numbering); assert.equal(result.reason, 'certificateHold'); assert.equal(result.source, 'crl');
+  }
+  // A delta issued with the same number as the complete CRL carries the same information (5.2.3).
+  assert.equal(deltaRelation(full, await deltaList({ number: 20, deltaBase: 19, entries: unhold() })), 'older');
+});
+
+test('CRL: NCA numbers complete and delta lists separately; base and issue time decide', async () => {
+  const at = Date.now() - 3600000;
+  // Live shape on 2026-11-09: complete 1468, delta 63642 with BaseCRLNumber 1468, same thisUpdate.
+  const full = await fullList({ number: 1469, thisUpdate: at, entries: hold() });
+  const current = await deltaList({ number: 63680, deltaBase: 1469, thisUpdate: at, entries: unhold() });
+  assert.equal(deltaRelation(full, current, 'nca'), 'compatible');
+  assert.equal(statusFromCrls(full, current, serialBytes(leaf), 'nca').status, 'good', 'a current delta lifts the hold');
+  const revoking = await deltaList({ number: 63681, deltaBase: 1469, thisUpdate: at + 10 * minute, entries: [{ serial: serialHex(leaf), reason: 1 }] });
+  assert.equal(statusFromCrls(await fullList({ number: 1469, thisUpdate: at }), revoking, serialBytes(leaf), 'nca').status, 'revoked');
+
+  // Yesterday's delta: RFC (c) and (d) both hold (1469 >= 1468, 1469 < 63650) because the delta
+  // sequence is far ahead, so plain RFC numbering would merge it and drop the hold.
+  const yesterday = await deltaList({ number: 63650, deltaBase: 1468, thisUpdate: at - 30 * minute, entries: unhold() });
+  assert.equal(deltaRelation(full, yesterday, 'rfc5280'), 'compatible', 'why NCA needs its own profile');
+  assert.equal(deltaRelation(full, yesterday, 'nca'), 'older');
+  assert.equal(statusFromCrls(full, yesterday, serialBytes(leaf), 'nca').status, 'revoked');
+
+  // A delta for a complete CRL we do not have: no permissive answer, a permanent revocation stands.
+  const ahead = await deltaList({ number: 63700, deltaBase: 1470, thisUpdate: at + 60 * minute });
+  assert.equal(deltaRelation(full, ahead, 'nca'), 'newer');
+  const clean = await fullList({ number: 1469, thisUpdate: at });
+  assert.throws(() => statusFromCrls(clean, ahead, serialBytes(leaf), 'nca'), { code: 'CRL_DELTA_MISMATCH' });
+  assert.throws(() => statusFromCrls(full, ahead, serialBytes(leaf), 'nca'), { code: 'CRL_DELTA_MISMATCH' }, 'a hold may have been lifted or kept');
+  const compromised = await fullList({ number: 1469, thisUpdate: at, entries: [{ serial: serialHex(leaf), reason: 1 }] });
+  assert.equal(statusFromCrls(compromised, ahead, serialBytes(leaf), 'nca').status, 'revoked');
+
+  // Contradictory issue times are a conflict, never good.
+  const backdated = await deltaList({ number: 63690, deltaBase: 1469, thisUpdate: at - 10 * minute, entries: unhold() });
+  assert.equal(deltaRelation(full, backdated, 'nca'), 'conflict');
+  assert.throws(() => statusFromCrls(full, backdated, serialBytes(leaf), 'nca'), { code: 'CRL_DELTA_MISMATCH' });
+  const lateOld = await deltaList({ number: 63691, deltaBase: 1468, thisUpdate: at + 10 * minute, entries: unhold() });
+  assert.equal(deltaRelation(full, lateOld, 'nca'), 'conflict');
+  const early = await deltaList({ number: 63692, deltaBase: 1470, thisUpdate: at - minute });
+  assert.equal(deltaRelation(full, early, 'nca'), 'conflict');
+});
+
+test('CRL: mirror copies are combined into the newest consistent pair', async () => {
+  const at = Date.now() - 3600000;
+  const older = await fullList({ number: 1468, thisUpdate: at - 86400000 + 7200000 });
+  const newer = await fullList({ number: 1469, thisUpdate: at, entries: hold() });
+  const oldDelta = await deltaList({ number: 63650, deltaBase: 1468, thisUpdate: at - 30 * minute, entries: unhold() });
+  const delta = await deltaList({ number: 63680, deltaBase: 1469, thisUpdate: at + 10 * minute });
+  const later = await deltaList({ number: 63681, deltaBase: 1469, thisUpdate: at + 50 * minute, entries: unhold() });
+  let picked = selectCrls([older, newer], [oldDelta, delta, later], 'nca');
+  assert.equal(picked.full, newer); assert.equal(picked.delta, later); assert.equal(picked.settled, true);
+  assert.equal(statusFromCrls(picked.full, picked.delta, serialBytes(leaf), 'nca').status, 'good');
+  picked = selectCrls([newer], [oldDelta], 'nca');
+  assert.equal(picked.delta, null, 'only an outdated delta: the complete CRL alone');
+  assert.equal(statusFromCrls(picked.full, picked.delta, serialBytes(leaf), 'nca').status, 'revoked');
+  picked = selectCrls([older], [oldDelta, delta], 'nca');
+  assert.equal(picked.settled, false, 'a delta for a newer complete CRL proves the pair is outdated');
+  assert.throws(() => statusFromCrls(picked.full, picked.delta, serialBytes(leaf), 'nca'), { code: 'CRL_DELTA_MISMATCH' });
 });
 
 // Fake network for the checker: synthetic CAs are mapped to the pinned NCA URLs.
@@ -199,6 +272,68 @@ test('chain: revoked, unknown and unavailable block; OCSP errors fall back to CR
   const unavailable = await offline.checker.checkPath(path);
   assert.equal(unavailable.state, 'unavailable'); assert.equal(blocks(unavailable), true);
   assert.deepEqual(offline.calls.filter(url => url.includes('nca_rsa_2022')), ['https://crl.pki.gov.kz/nca_rsa_2022.crl', 'https://crl1.pki.gov.kz/nca_rsa_2022.crl'], 'mirror tried once');
+});
+
+// OCSP down; every CRL URL answers from `lists` (bytes, or missing = network error).
+async function crlNetwork(lists, clock = { value: Date.now() }) {
+  const testIssuers = { [await fingerprintOf(ca)]: { like: 'nca_rsa_2022' }, [await fingerprintOf(rootCa)]: { like: 'root' } };
+  const calls = [];
+  const fetchImpl = async url => {
+    calls.push(url);
+    if (url === 'https://crl.root.gov.kz/rsa2020.crl') return new Response(crl(rootCa, { thisUpdate: clock.value - 3600000, nextUpdate: clock.value + 86400000 }), { headers: { 'content-type': 'application/pkix-crl' } });
+    if (!lists[url]) throw new TypeError('Failed to fetch');
+    return new Response(lists[url], { headers: { 'content-type': 'application/octet-stream' } });
+  };
+  return { checker: new RevocationChecker({ fetchImpl, store: memoryStore(), testIssuers, now: () => clock.value }), calls, clock, path: [leaf.info, ca.info, rootCa.info] };
+}
+const [FULL, FULL1] = ['https://crl.pki.gov.kz/nca_rsa_2022.crl', 'https://crl1.pki.gov.kz/nca_rsa_2022.crl'];
+const [DELTA, DELTA1] = ['https://crl.pki.gov.kz/nca_d_rsa_2022.crl', 'https://crl1.pki.gov.kz/nca_d_rsa_2022.crl'];
+
+test('chain: a cached complete CRL is refreshed when the delta needs a newer one', async () => {
+  const day = Date.now() - 3 * 3600000;
+  const lists = { [FULL]: crl(ca, { number: 1468, thisUpdate: day, nextUpdate: day + 25 * 3600000 }),
+    [DELTA]: crl(ca, { number: 63640, deltaBase: 1468, thisUpdate: day, nextUpdate: day + 3600000 }) };
+  const { checker, calls, path, clock } = await crlNetwork(lists, { value: day + 10 * minute });
+  assert.equal((await checker.checkPath(path)).state, 'good');
+  // Next publication: complete 1469 puts the leaf on hold; the cached 1468 is still within nextUpdate.
+  const next = day + 2 * 3600000;
+  lists[FULL] = crl(ca, { number: 1469, thisUpdate: next, nextUpdate: next + 25 * 3600000, entries: hold() });
+  lists[DELTA] = crl(ca, { number: 63660, deltaBase: 1469, thisUpdate: next, nextUpdate: next + 3600000 });
+  clock.value = next + 10 * minute; calls.length = 0;
+  const result = await checker.checkPath(path);
+  assert.equal(result.state, 'revoked', 'never good from the outdated complete CRL');
+  assert.equal(result.certificates[0].reason, 'certificateHold');
+  assert.ok(result.certificates[0].errors.includes('CRL_DELTA_MISMATCH'));
+  assert.ok(calls.includes(FULL), 'the complete CRL was fetched again');
+});
+
+test('chain: a lagging mirror delta does not lift a newer hold; the matching mirror delta is used', async () => {
+  const at = Date.now() - 3600000;
+  const lists = { [FULL]: crl(ca, { number: 1469, thisUpdate: at, entries: hold() }),
+    [DELTA]: crl(ca, { number: 63650, deltaBase: 1468, thisUpdate: at - 30 * minute, nextUpdate: Date.now() + 3600000, entries: unhold() }),
+    [DELTA1]: crl(ca, { number: 63680, deltaBase: 1469, thisUpdate: at + 10 * minute, nextUpdate: Date.now() + 3600000 }) };
+  const { checker, calls, path } = await crlNetwork(lists);
+  const result = await checker.checkPath(path);
+  assert.equal(result.state, 'revoked');
+  assert.equal(result.certificates[0].source, 'crl+delta', 'combined with the mirror delta for the same base');
+  assert.ok(!calls.includes(FULL1), 'the complete CRL is not downloaded twice when a matching delta exists');
+
+  lists[DELTA1] = crl(ca, { number: 63681, deltaBase: 1469, thisUpdate: at + 20 * minute, nextUpdate: Date.now() + 3600000, entries: unhold() });
+  assert.equal((await (await crlNetwork(lists)).checker.checkPath(path)).state, 'good', 'a correct newer delta still lifts the hold');
+});
+
+test('chain: incompatible complete and delta CRLs end as unavailable, never good', async () => {
+  const at = Date.now() - 3600000;
+  const lists = { [FULL]: crl(ca, { number: 1468, thisUpdate: at - 86400000 + 7200000 }), [FULL1]: crl(ca, { number: 1468, thisUpdate: at - 86400000 + 7200000 }),
+    [DELTA]: crl(ca, { number: 63680, deltaBase: 1469, thisUpdate: at, nextUpdate: Date.now() + 3600000, entries: [{ serial: serialHex(leaf), reason: 1 }] }) };
+  const { checker, calls, path } = await crlNetwork(lists);
+  const result = await checker.checkPath(path);
+  assert.equal(result.state, 'unavailable'); assert.equal(blocks(result), true);
+  assert.equal(result.certificates[0].code, 'CRL_DELTA_MISMATCH');
+  assert.ok(calls.includes(FULL) && calls.includes(FULL1), 'both complete CRL mirrors were tried');
+  // Same for contradictory issue times within one base.
+  const conflict = { [FULL]: crl(ca, { number: 1469, thisUpdate: at, entries: hold() }), [DELTA]: crl(ca, { number: 63680, deltaBase: 1469, thisUpdate: at - 10 * minute, nextUpdate: Date.now() + 3600000, entries: unhold() }) };
+  assert.equal((await (await crlNetwork(conflict)).checker.checkPath(path)).state, 'unavailable');
 });
 
 test('chain: issuers without pinned sources are "not checked" and never shown as good', async () => {
