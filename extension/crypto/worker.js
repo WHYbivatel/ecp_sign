@@ -1,6 +1,7 @@
 import { checkSignerConstraints, isUnifiedNcaCertificate } from './constraints.js';
 import { openContainer } from './signer.js';
 import { signCms } from './cms.js';
+import { inspectPdf, signPades, checkPadesKey } from './pades.js';
 import { signXml, verifyCreatedXml } from './xml.js';
 import { base64, unbase64, utf8 } from './encoding.js';
 import { verifyChain } from './chain.js';
@@ -13,7 +14,10 @@ import { RevocationChecker, blocks, summarize, assessHistory, isCurrent, STATES 
 let signer;
 let busy = false;
 let trust, revocationPath, checker;
-function checkConstraints(request) { checkSignerConstraints(signer.info, request, trust); }
+function checkConstraints(request) {
+  checkSignerConstraints(signer.info, request, trust);
+  if (request.format === 'pades') checkPadesKey(signer);
+}
 const revocation = () => checker ||= new RevocationChecker();
 const notChecked = reason => summarize([], new Date().toISOString(), reason);
 const REVOCATION_MESSAGES = {
@@ -82,6 +86,11 @@ self.onmessage = async ({ data }) => {
       try { self.postMessage({ kind: 'inspected', ...describeCms(raw) }); }
       finally { raw.fill(0); }
       self.close();
+    } else if (data.kind === 'inspect-pdf') {
+      const raw = new Uint8Array(data.document);
+      try { self.postMessage({ kind: 'pdf-inspected', ...await inspectPdf(raw) }); }
+      finally { raw.fill(0); }
+      self.close();
     } else if (data.kind === 'verify') {
       const raw = new Uint8Array(data.signature);
       const original = data.original ? new Uint8Array(data.original) : undefined;
@@ -123,6 +132,7 @@ self.onmessage = async ({ data }) => {
             if (request.moduleId === 'qiwi' && !await verifyCreatedXml(signer, signedXml)) throw new Error('Не удалось проверить созданную XML-подпись.');
             results.push(signedXml);
           }
+          else if (request.format === 'pades') results.push(base64(await signPades(signer, bytes)));
           else if (request.format === 'raw') results.push(base64(request.digested ? await signer.signDigest(bytes) : await signer.sign(bytes)));
           else results.push(base64(await signCms(signer, bytes, { encapsulate: request.encapsulate, cades: request.cades, digested: request.digested,
             timestamp: request.timestamp, onTimestamp: stamp => timestamps.push(stamp) })));
