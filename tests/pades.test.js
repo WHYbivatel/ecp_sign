@@ -134,6 +134,45 @@ test('PAdES refuses unsupported, encrypted and already signed PDFs without touch
   await refusal(inspectPdf(xfa), 'PDF_XFA');
 });
 
+test('PAdES finds signature fields with an indirect or inherited /FT and keeps text fields', async () => {
+  const indirect = await syntheticPdf(doc => {
+    const field = doc.context.register(doc.context.obj({ FT: doc.context.register(PDFName.of('Sig')), T: PDFString.of('Approval') }));
+    doc.catalog.set(PDFName.of('AcroForm'), doc.context.obj({ Fields: [field] }));
+  });
+  await refusal(inspectPdf(indirect), 'PDF_FIELD');
+  await refusal(signPades(signer, indirect), 'PDF_FIELD');
+
+  // Parent is a direct dictionary inside /Fields: only the tree walk sees the inherited type.
+  const inheritedField = type => syntheticPdf(doc => {
+    const widget = doc.context.register(doc.context.obj({ Type: 'Annot', Subtype: 'Widget', Rect: [50, 600, 250, 620], T: PDFString.of('kid'), P: doc.getPage(0).ref }));
+    doc.getPage(0).node.set(PDFName.of('Annots'), doc.context.obj([widget]));
+    doc.catalog.set(PDFName.of('AcroForm'), doc.context.obj({ Fields: [doc.context.obj({ FT: doc.context.register(PDFName.of(type)), T: PDFString.of('parent'), Kids: [widget] })] }));
+  });
+  await refusal(inspectPdf(await inheritedField('Sig')), 'PDF_FIELD');
+  const viaParent = await syntheticPdf(doc => {
+    const parent = doc.context.register(doc.context.obj({ FT: 'Sig', T: PDFString.of('parent') }));
+    const widget = doc.context.register(doc.context.obj({ Type: 'Annot', Subtype: 'Widget', Rect: [0, 0, 0, 0], Parent: parent }));
+    doc.getPage(0).node.set(PDFName.of('Annots'), doc.context.obj([widget]));
+  });
+  await refusal(inspectPdf(viaParent), 'PDF_FIELD');
+
+  const cyclic = await syntheticPdf(doc => {
+    const first = doc.context.nextRef(), second = doc.context.nextRef();
+    doc.context.assign(first, doc.context.obj({ T: PDFString.of('a'), Kids: [second] }));
+    doc.context.assign(second, doc.context.obj({ T: PDFString.of('b'), Kids: [first], Parent: first }));
+    doc.catalog.set(PDFName.of('AcroForm'), doc.context.obj({ Fields: [first] }));
+  });
+  await refusal(inspectPdf(cyclic), 'PDF_BROKEN');
+
+  assert.deepEqual(await inspectPdf(await inheritedField('Tx')), { pages: 2 });
+  const text = await syntheticPdf(async doc => {
+    const field = doc.getForm().createTextField('reference');
+    field.setText('Synthetic 42'); field.addToPage(doc.getPage(1), { x: 50, y: 700, width: 200, height: 20 });
+  });
+  const signed = await signPades(signer, text);
+  assert.equal((await PDFDocument.load(signed)).getForm().getTextField('reference').getText(), 'Synthetic 42');
+});
+
 test('PAdES is not offered for GOST keys until a profile is independently validated', async () => {
   const gost = gostFixture('256', { eku: ['1.3.6.1.5.5.7.3.4'] });
   const gostSigner = await openContainer(gost.container, PASSWORD);

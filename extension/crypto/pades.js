@@ -1,4 +1,4 @@
-import { PDFDocument, PDFDict, PDFName, PDFArray, PDFNumber, PDFHexString, PDFRawStream, PDFString } from 'pdf-lib';
+import { PDFDocument, PDFDict, PDFName, PDFArray, PDFNumber, PDFHexString, PDFRawStream, PDFRef, PDFString } from 'pdf-lib';
 import { pdflibAddPlaceholder } from '@signpdf/placeholder-pdf-lib';
 import { SignPdf, Signer } from '@signpdf/signpdf';
 import { SUBFILTER_ETSI_CADES_DETACHED } from '@signpdf/utils';
@@ -39,24 +39,76 @@ async function load(data) {
 }
 
 const dictOf = object => object instanceof PDFDict ? object : object instanceof PDFRawStream ? object.dict : null;
+const MAX_DEPTH = 32;
+// Values such as /FT and /Type may be references to separate objects; a reference chain is malformed.
+function resolve(doc, value) {
+  for (let step = 0; value instanceof PDFRef; step++) {
+    if (step >= MAX_DEPTH) throw refuse('broken');
+    value = doc.context.lookup(value);
+  }
+  return value;
+}
+const entry = (doc, dict, key) => resolve(doc, dict.get(name(key)));
 function signatureDicts(doc) {
   const found = [];
   for (const [, object] of doc.context.enumerateIndirectObjects()) {
     const dict = dictOf(object);
-    const type = dict?.get(name('Type'));
-    if (dict && (type === name('Sig') || type === name('DocTimeStamp') || dict.has(name('ByteRange')))) found.push(dict);
+    if (!dict) continue;
+    const type = entry(doc, dict, 'Type');
+    if (type === name('Sig') || type === name('DocTimeStamp') || dict.has(name('ByteRange'))) found.push(dict);
   }
   return found;
+}
+
+// Field type, inherited through /Parent (ISO 32000-1 §12.7.3.1).
+function fieldType(doc, dict) {
+  const seen = new Set();
+  for (let node = dict; node instanceof PDFDict; node = resolve(doc, node.get(name('Parent')))) {
+    if (seen.has(node) || seen.size >= MAX_DEPTH) throw refuse('broken');
+    seen.add(node);
+    const type = entry(doc, node, 'FT');
+    if (type !== undefined) return type;
+  }
+  return undefined;
+}
+
+// Every field in the AcroForm tree and every widget on pages, with the type each one inherits.
+function hasSignatureField(doc) {
+  for (const [, object] of doc.context.enumerateIndirectObjects()) {
+    const dict = dictOf(object);
+    if (dict && fieldType(doc, dict) === name('Sig')) return true;
+  }
+  const visited = new Set();
+  const walk = (value, inherited, depth) => {
+    const node = resolve(doc, value);
+    if (!(node instanceof PDFDict)) return false;
+    if (visited.has(node) || depth > MAX_DEPTH) throw refuse('broken');
+    visited.add(node);
+    const type = entry(doc, node, 'FT') ?? inherited;
+    if (type === name('Sig')) return true;
+    const kids = resolve(doc, node.get(name('Kids')));
+    return kids instanceof PDFArray && kids.asArray().some(kid => walk(kid, type, depth + 1));
+  };
+  const form = resolve(doc, doc.catalog.get(name('AcroForm')));
+  const fields = form instanceof PDFDict ? resolve(doc, form.get(name('Fields'))) : undefined;
+  if (fields instanceof PDFArray && fields.asArray().some(field => walk(field, undefined, 0))) return true;
+  for (const page of doc.getPages()) {
+    const annotations = resolve(doc, page.node.get(name('Annots')));
+    if (annotations instanceof PDFArray && annotations.asArray().some(annotation => {
+      const dict = resolve(doc, annotation);
+      return dict instanceof PDFDict && fieldType(doc, dict) === name('Sig');
+    })) return true;
+  }
+  return false;
 }
 
 function check(doc) {
   try {
     if (!doc.getPageCount()) throw refuse('empty');
     if (doc.catalog.has(name('Perms')) || signatureDicts(doc).length) throw refuse('signed');
-    const form = doc.catalog.lookup(name('AcroForm'));
+    const form = resolve(doc, doc.catalog.get(name('AcroForm')));
     if (form instanceof PDFDict && form.has(name('XFA'))) throw refuse('xfa');
-    for (const [, object] of doc.context.enumerateIndirectObjects())
-      if (dictOf(object)?.get(name('FT')) === name('Sig')) throw refuse('field');
+    if (hasSignatureField(doc)) throw refuse('field');
     return { pages: doc.getPageCount() };
   } catch (error) { throw error.pdf ? error : refuse('broken'); }
 }
