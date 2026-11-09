@@ -22,12 +22,20 @@ The full Apache 2.0 license is distributed with the extension.
 
 ## Other bundled packages
 
-- node-forge 1.4.0, Digital Bazaar, BSD-3-Clause option of the dual license.
+- node-forge 1.4.3, Digital Bazaar, BSD-3-Clause option of the dual license.
 - @xmldom/xmldom 0.9.12, MIT.
 - xml-crypto 6.4.0, MIT. Only canonicalization and its dependencies are used in
   the browser; Node crypto entry points are replaced by throwing stubs.
 - xpath 0.0.33, MIT (version resolved in package-lock.json).
 - @xmldom/is-dom-node 1.0.1, MIT (version resolved in package-lock.json).
+- pdf-lib 1.17.1, Andrew Dillon, MIT; with @pdf-lib/standard-fonts 1.0.0 (MIT),
+  @pdf-lib/upng 1.0.1 (MIT), pako 1.0.11 (MIT and Zlib) and tslib 1.14.1 (0BSD).
+  Used in the signing worker to read PDF documents and add the signature field.
+- @signpdf/signpdf, @signpdf/placeholder-pdf-lib and @signpdf/utils 4.0.0,
+  The node-signpdf Authors, MIT. Byte range and signature embedding for PAdES.
+  The packages ship without a license file; the upstream MIT text is bundled.
+- buffer 6.0.3 (MIT) with base64-js 1.5.1 (MIT) and ieee754 1.2.1
+  (BSD-3-Clause): Buffer polyfill limited to the @signpdf modules.
 
 The exact installed dependency graph is pinned in package-lock.json.
 License files are included in each build's licenses directory.
