@@ -90,6 +90,31 @@ try {
   const hardware = await context.newPage();
   await hardware.goto(CREATE);
   assert.equal((await hardware.evaluate(() => createCertRequest())).code, 'STORAGE_NOT_SUPPORTED');
+  // The refusal is logged for the popup with names and structure only.
+  const hardwareTab = await sw.evaluate(async url => (await chrome.tabs.query({ url })).at(-1).id, CREATE);
+  const [logged] = (await sw.evaluate(key => chrome.storage.session.get(key), `diagnostic:${hardwareTab}`))[`diagnostic:${hardwareTab}`];
+  assert.deepEqual({ ...logged, at: 0, reason: '' }, { at: 0, module: 'kz.gov.pki.knca.basics', method: 'generateCsr', class: 'PKIEssentials', stage: 'refused', code: 'STORAGE_NOT_SUPPORTED', reason: '',
+    args: { allowedStorages: { array: 2, items: ['string'] }, defaultPassword: 'string', dn: { '2.5.4.3': 'string', '2.5.4.4': 'string', '2.5.4.5': 'string', '2.5.4.6': 'string', '2.5.4.42': 'string', '2.5.4.10': 'string', '2.5.4.11': 'string' },
+      email: 'empty', subjectAltNames: 'empty', params: { array: 1, items: [{ algorithm: 'string', length: 'number' }] }, locale: 'string', omittedKeyIds: { array: 1, items: ['empty'] } } });
+  assert.ok(!/IIN0|BIN0|synthetic-default|ТЕСТ|pki\.gov\.kz/.test(JSON.stringify(logged)));
+  const sitePopup = await context.newPage();
+  await sitePopup.goto(`chrome-extension://${extensionId}/index.html?site=${hardwareTab}`);
+  await sitePopup.locator('#site-log:not([hidden])').waitFor();
+  assert.equal(await sitePopup.locator('#log-method').textContent(), 'PKIEssentials.generateCsr');
+  assert.equal(await sitePopup.locator('#log-result').textContent(), 'Отклонён · STORAGE_NOT_SUPPORTED');
+  assert.equal(await sitePopup.locator('#version').textContent(), JSON.parse(readFileSync(resolve('package.json'), 'utf8')).version);
+  await sitePopup.screenshot({ path: 'artifacts/issuance-popup-log.png' });
+  // A page already served by Tegin 0.5.2 (shared ncabrowser:* channel) is reported as a version conflict.
+  await hardware.evaluate(source => {
+    const legacy = function () {};
+    Object.defineProperty(legacy, '__ncaBrowserAdapter', { value: true });
+    window.WebSocket = legacy;
+    (0, eval)(source);
+  }, readFileSync(join(extension, 'content', 'inject.js'), 'utf8'));
+  assert.equal(await hardware.evaluate(() => document.documentElement.getAttribute('data-tegin-conflict')), 'legacy');
+  await sitePopup.reload();
+  assert.equal(await sitePopup.locator('#site-state').textContent(), 'Конфликт версий');
+  await sitePopup.close();
   await hardware.close();
   storages = 'PKCS12,AKKaztokenStore,AKKZIDCardStore';
   console.log('PASS: generateCsr from 127.0.0.1, a look-alike host, an iframe of the portal, or a hardware-only template is refused without a window');

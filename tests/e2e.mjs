@@ -996,8 +996,17 @@ try {
   assert.deepEqual(errors, []);
   const stored = await sw.evaluate(async () => ({ local: await chrome.storage.local.get(null), session: await chrome.storage.session.get(null) }));
   assert.deepEqual(stored.local, {});
-  assert.deepEqual(stored.session, {});
-  console.log('PASS: network limited to local fixture and optional NUC TSA; no persistent keys or pending session data');
+  // Session keeps only the per-tab request log: names, fixed reasons and argument structure, never values.
+  const logged = Object.entries(stored.session);
+  assert.ok(logged.length && logged.every(([key]) => /^diagnostic:\d+$/.test(key)), Object.keys(stored.session).join(', '));
+  const structure = value => typeof value === 'string' ? /^(string|empty|number|boolean|null|undefined|object|array\(\d+\))$/.test(value)
+    : Array.isArray(value) ? value.every(structure) : Object.entries(value).every(([key, item]) => key === 'array' ? Number.isInteger(item) : structure(item));
+  for (const entry of logged.flatMap(([, list]) => list)) {
+    assert.deepEqual(Object.keys(entry).sort(), ['args', 'at', 'class', 'code', 'method', 'module', 'reason', 'stage']);
+    assert.ok(structure(entry.args), JSON.stringify(entry.args));
+  }
+  assert.ok(!JSON.stringify(stored.session).includes(PASSWORD));
+  console.log('PASS: network limited to local fixture and optional NUC TSA; no persistent keys or pending session data; the request log holds structure only');
   console.log('Browser E2E completed.');
 } finally {
   await context?.close();

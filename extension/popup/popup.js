@@ -20,6 +20,20 @@ async function openTool(mode = '') {
 if (new URLSearchParams(location.search).has('workspace')) document.body.setAttribute('data-workspace', '');
 document.querySelector('#local').addEventListener('click', () => openTool());
 document.querySelector('#verify').addEventListener('click', () => openTool('verify'));
+const STAGES = { refused: 'Отклонён', answered: 'Отвечен сразу', window: 'Открыто окно Tegin' };
+const FINAL = { ok: 'Выполнен', cancelled: 'Отменён' };
+async function showLog(tabId) {
+  const entry = (await api.storage.session.get('diagnostic:' + tabId))['diagnostic:' + tabId]?.[0];
+  if (!entry) return;
+  const result = entry.stage === 'finished' ? FINAL[entry.code] || `Ошибка ${entry.code}` : STAGES[entry.stage] || entry.stage;
+  const failed = entry.stage === 'refused' || (entry.stage === 'finished' && !FINAL[entry.code]);
+  document.querySelector('#log-method').textContent = [entry.class, entry.method].filter(Boolean).join('.') || '—';
+  document.querySelector('#log-result').textContent = failed && entry.stage === 'refused' ? `${result} · ${entry.code}` : result;
+  document.querySelector('#log-result').toggleAttribute('data-failed', failed);
+  document.querySelector('#log-reason').textContent = entry.reason || '—';
+  document.querySelector('#site-log').hidden = false;
+}
+document.querySelector('#version').textContent = api.runtime.getManifest().version;
 async function loadSite() {
   try {
     const sourceId = new URLSearchParams(location.search).get('site');
@@ -33,8 +47,11 @@ async function loadSite() {
     const allowed = builtin || await api.permissions.contains({ origins: [origin] });
     current = { tabId: tab.id, origin, allowed, builtin };
     document.querySelector('#site-name').textContent = url.host;
-    const connected = allowed && await api.tabs.sendMessage(tab.id, { kind: 'nca:status' }, { frameId: 0 }).then(reply => reply?.active, () => false);
-    document.querySelector('#site-state').textContent = connected ? 'Подключено' : allowed ? 'Нужно обновить' : 'Нет доступа';
+    const reply = allowed ? await api.tabs.sendMessage(tab.id, { kind: 'nca:status' }, { frameId: 0 }).catch(() => null) : null;
+    const connected = Boolean(reply?.active);
+    document.querySelector('#site-state').textContent = reply?.conflict ? 'Конфликт версий' : connected ? 'Подключено' : allowed ? 'Нужно обновить' : 'Нет доступа';
+    if (reply?.conflict) status.textContent = 'Страницу обслуживает другая, более старая копия Tegin. Удалите её в chrome://extensions и обновите страницу.';
+    await showLog(tab.id);
     document.querySelector('#site-state').toggleAttribute('data-active', Boolean(connected));
     enable.firstChild.textContent = connected ? 'Обновить страницу сайта' : allowed ? 'Обновить для подключения' : 'Подключить сайт';
     enable.disabled = false;

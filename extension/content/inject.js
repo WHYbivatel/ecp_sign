@@ -1,5 +1,9 @@
 (() => {
-  if (window.WebSocket.__ncaBrowserAdapter) return;
+  if (window.WebSocket.__ncaBrowserAdapter) {
+    // An older Tegin (0.5.2 and earlier) owns WebSocket here and answers on ncabrowser:*, which this copy does not serve.
+    if (window.WebSocket.__teginChannel !== 'tegin') document.documentElement.setAttribute('data-tegin-conflict', 'legacy');
+    return;
+  }
   const NativeWebSocket = window.WebSocket;
   const nativeFetch = window.fetch;
   const sockets = new Map();
@@ -34,12 +38,12 @@
       if (this.pending) { this.close(1008, 'Only one pending request per socket'); return; }
       this.hasSentRequest = true;
       const id = crypto.randomUUID(); this.pending = id; sockets.set(id, this);
-      window.postMessage({ channel: 'ncabrowser:request', id, request }, location.origin);
+      window.postMessage({ channel: 'tegin:request', id, request }, location.origin);
     }
     close(code = 1000, reason = '') {
       if (this.readyState === 3) return;
       if (this.pending) {
-        window.postMessage({ channel: 'ncabrowser:cancel', id: this.pending }, location.origin);
+        window.postMessage({ channel: 'tegin:cancel', id: this.pending }, location.origin);
         sockets.delete(this.pending); this.pending = null;
       }
       this.readyState = 3;
@@ -59,6 +63,7 @@
   Object.setPrototypeOf(WebSocket, NativeWebSocket);
   WebSocket.prototype = NativeWebSocket.prototype;
   Object.defineProperty(WebSocket, '__ncaBrowserAdapter', { value: true });
+  Object.defineProperty(WebSocket, '__teginChannel', { value: 'tegin' });
   Object.defineProperty(WebSocket, Symbol.hasInstance, { value: value => value instanceof LocalSocket || value instanceof NativeWebSocket });
   window.WebSocket = WebSocket;
   if (nativeFetch) window.fetch = function(input, options) {
@@ -67,7 +72,7 @@
     return nativeFetch.call(this, input, options);
   };
   window.addEventListener('message', event => {
-    if (event.source !== window || event.origin !== location.origin || event.data?.channel !== 'ncabrowser:response') return;
+    if (event.source !== window || event.origin !== location.origin || event.data?.channel !== 'tegin:response') return;
     const socket = sockets.get(event.data.id);
     if (!socket || socket.readyState !== 1) return;
     sockets.delete(event.data.id); socket.pending = null;

@@ -3,3 +3,8 @@ body{width:400px;max-height:600px;overflow:auto;background:var(--surface)}.popup
 body[data-workspace]{width:auto;max-width:520px;max-height:none;min-height:100vh;margin:0 auto;box-shadow:0 0 60px #17223908}body[data-workspace] main{padding:24px}body[data-workspace] .popup-header{padding:24px}body[data-workspace] .tool{padding:18px}@media(max-width:420px){body[data-workspace]{width:100%;max-width:100%}}
 
 .module-link{margin-top:14px;border:1px solid var(--line);border-radius:14px}
+.site-log{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;margin:10px 0 0;padding:9px 11px;border-radius:9px;background:var(--soft);font-size:10px}
+.site-log dt{color:var(--muted)}
+.site-log dd{margin:0;color:var(--ink);overflow-wrap:anywhere}
+.site-log dd[data-failed]{color:var(--red)}
+.site-log[hidden]{display:none}
