@@ -4,7 +4,7 @@ import GostDigest from '../vendor/gost/digest.cjs';
 import { A, O, forge, parse, binary, bytes, der, oidValue, base64, utf8, seq, set } from './encoding.js';
 import { inspectPkcs12, ContainerError } from '../lib/pkcs12.js';
 
-const schemes = {
+export const schemes = {
   [O.gost512]: { label: 'ГОСТ 34.10-2015 · 512 бит', version: 2012, length: 512, namedCurve: 'T-512-A', curveOid: '1.2.398.3.10.1.1.2.2.1', hash: O.hash512, signature: O.sig512 },
   [O.gost256]: { label: 'ГОСТ 34.10-2015 · 256 бит', version: 2012, length: 256, curve: nca256, curveOid: '1.2.398.3.10.1.1.2.1.1', hash: O.hash256, signature: O.sig256 },
   [O.gost2004]: { label: 'ГОСТ 34.310-2004', version: 2001, length: 256, namedCurve: 'S-256-A', curveOid: '1.2.398.3.10.1.1.1.1.1', hash: O.hash2004, signature: O.sig2004 }

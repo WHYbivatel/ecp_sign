@@ -30,3 +30,20 @@ test('keys are confined to the signing worker and never stored or sent over runt
   assert.match(approval, /worker\.postMessage\(\{ kind: 'open', container, password, request \}, \[container\]\)/);
   assert.match(approval, /worker\?\.terminate\(\)/);
 });
+
+test('NUC issuance stores only the encrypted application key and hands the password to the worker alone', async () => {
+  const issue = await readFile(new URL('signing/issue.js', source), 'utf8');
+  assert.doesNotMatch(issue, /localStorage|indexedDB|sessionStorage|\bfetch\(|XMLHttpRequest|WebSocket|storage\.session/);
+  // Every write is an "issuance:" record built from worker output: sealed key, public identities, labels.
+  const writes = [...issue.matchAll(/storage\.local\.set\(\{ \[([^\]]+)\]: ([^}]*\}?)/g)].map(match => match[1]);
+  assert.ok(writes.length >= 2 && writes.every(key => /^(STORE \+ recordId|key)$/.test(key)), writes.join(', '));
+  assert.match(issue, /const record = \{ v: 1, id: recordId, origin, created: [^\n]+\n\s+algorithms: result\.algorithms, identities: result\.identities, status: 'requested', sealed: result\.sealed \};/);
+  // The password goes to the crypto worker only, never into runtime messages or storage.
+  for (const call of issue.matchAll(/message\('nca:[a-z]+'(?:, ([^)]*\)?))?\)/g)) assert.doesNotMatch(call[0], /password|sealed|container/);
+  assert.match(issue, /run\(\{ kind: 'issue-generate', request, password, context: recordId \}\)/);
+  assert.match(issue, /run\(\{ kind: 'issue-install', certificates: request\.certificates, pending, password \}\)/);
+  const worker = await readFile(new URL('crypto/worker.js', source), 'utf8');
+  assert.match(worker, /kind: 'issue-generated', \.\.\.result/);
+  const issuance = await readFile(new URL('crypto/issuance.js', source), 'utf8');
+  assert.match(issuance, /return \{ pems: csrs\.map\(csrPem\), identities, algorithms: [^,]+, sealed \};/);
+});

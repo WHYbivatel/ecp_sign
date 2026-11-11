@@ -586,3 +586,21 @@ NCA_KALKAN_JARS=/path/kalkancrypt-0.7.8.jar:/path/kalkancrypt_xmldsig-osgi-0.4.j
 | Подмена документа | Изменённый байт и чужая подпись: DSS `TOTAL_FAILED/HASH_FAILURE`, pyHanko intact=false |
 | Изменение после подписания | Инкрементальное обновление: DSS сообщает об изменениях, pyHanko `ENTIRE_REVISION`, итог false |
 | Настоящий зашифрованный и подписанный pyHanko PDF | Отказ, чужая подпись остаётся действительной |
+
+## Выпуск ЭЦП юрлиц НУЦ РК без NCALayer (начат)
+
+Ветка `codex/nca-key-issuance` от `69c9dff`. Подробности: [nca-key-issuance.md](nca-key-issuance.md).
+
+- `generateCsr` и `importCertificate` портала `did.pki.gov.kz` / `nca.pki.gov.kz`: ключ ГОСТ
+  34.10-2015 512/256 или RSA создаётся в Worker. Сайт получает только PKCS#10. До выпуска
+  ключ хранится зашифрованным в `storage.local`, после выпуска сохраняется `.p12`.
+  Сертификат устанавливается только к своему ключу и с цепочкой НУЦ РК.
+- Шаблоны с защищённым носителем (Казначейство-Клиент) получают `STORAGE_NOT_SUPPORTED`.
+- На живом портале не проверялось: нужна анонимизированная выгрузка со страницы шага 3.
+
+| Проверка | Результат |
+|---|---|
+| `npm test` | 106/106 (+10 `issuance.test.js`, +1 `privacy.test.js`) |
+| `npm run build` | Успешно |
+| `npm run test:e2e` | 37 + 9 + 7, код выхода 0 (без `DSS_VALIDATOR` и живых служб НУЦ) |
+| `tests/kalkan-issuance.mjs` | ГОСТ 512, ГОСТ 256, RSA: Kalkan проверяет CSR, совпадение с запросом Kalkan, `.p12` открывается и пересохраняется Kalkan, CAdES принят |

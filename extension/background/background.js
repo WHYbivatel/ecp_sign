@@ -1,11 +1,13 @@
 import { findModule, enforceSettings } from '../modules/registry.js';
 import { assembleResult } from '../modules/adapters.js';
 import { normalizeRequest, successResponse, errorResponse } from '../signing/protocol.js';
+import { isIssuanceRequest, issuanceOrigin, normalizeIssuance, issuanceResult, issuanceError } from '../signing/issuance-protocol.js';
 
 const PREFIX = 'pending:';
 const TTL = 3 * 60 * 1000;
 const api = globalThis.browser || chrome;
 const uiUrl = api.runtime.getURL('signing/approve.html');
+const PAGES = ['signing/approve.html', 'signing/issue.html'];
 
 // Local tools live in one normal browser tab; portal approval stays isolated.
 api.action.onClicked.addListener(async tab => {
@@ -22,11 +24,14 @@ api.action.onClicked.addListener(async tab => {
   }
 });
 
-function isConfirmation(sender) {
-  if (sender.id !== api.runtime.id || !sender.url) return false;
+// The extension page a message came from, if it is one of the confirmation windows.
+function confirmationPage(sender) {
+  if (sender.id !== api.runtime.id || !sender.url) return null;
   const url = new URL(sender.url);
-  const expected = new URL(uiUrl);
-  return url.protocol === expected.protocol && url.host === expected.host && url.pathname === expected.pathname;
+  return PAGES.find(page => {
+    const expected = new URL(api.runtime.getURL(page));
+    return url.protocol === expected.protocol && url.host === expected.host && url.pathname === expected.pathname;
+  }) || null;
 }
 async function pending(id) { return (await api.storage.session.get(PREFIX + id))[PREFIX + id]; }
 async function alive(record) {
@@ -51,25 +56,34 @@ async function handle(message, sender) {
   if (sender.id !== api.runtime.id) throw new Error('Недопустимый отправитель.');
   if (message.kind === 'nca:request') {
     if (!sender.tab || !sender.url || !Number.isInteger(sender.frameId) || !/^[a-z0-9-]{1,80}$/i.test(message.instance || '') || !/^[a-z0-9-]{1,80}$/i.test(message.token || '')) throw new Error('Некорректный источник запроса.');
-    const origin = new URL(sender.url).origin;
+    let origin = new URL(sender.url).origin;
     if (!origin.startsWith('https://') && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) throw new Error('Поддерживаются HTTPS-сайты.');
-    let normalized;
-    try { normalized = normalizeRequest(message.request); } catch (error) { return { response: errorResponse(message.request, error.message) }; }
-    const module = findModule(message.request.module);
-    try { if (module) enforceSettings(module, normalized, origin, (await api.storage.local.get('moduleSettings')).moduleSettings?.[module.id]); }
-    catch (error) { return { response: errorResponse(message.request, error.message) }; }
-    if (normalized.immediate) return { response: successResponse(message.request, normalized.value) };
+    let normalized, request = message.request, page = 'signing/approve.html';
+    if (isIssuanceRequest(message.request)) {
+      // Key generation and installation: NUC request portal only, verified by the sender's URL.
+      try { origin = issuanceOrigin(sender); normalized = normalizeIssuance(message.request); }
+      catch (error) { return { response: issuanceError(error.code, error.message) }; }
+      // Only the call identity is kept; the portal's storage hints are dropped.
+      request = { module: message.request.module, method: message.request.method, class: message.request.class };
+      page = 'signing/issue.html';
+    } else {
+      try { normalized = normalizeRequest(message.request); } catch (error) { return { response: errorResponse(message.request, error.message) }; }
+      const module = findModule(message.request.module);
+      try { if (module) enforceSettings(module, normalized, origin, (await api.storage.local.get('moduleSettings')).moduleSettings?.[module.id]); }
+      catch (error) { return { response: errorResponse(message.request, error.message) }; }
+      if (normalized.immediate) return { response: successResponse(message.request, normalized.value) };
+    }
     const records = Object.entries(await api.storage.session.get(null)).filter(([key]) => key.startsWith(PREFIX));
     for (const [, record] of records) if (Date.now() > record.expires) await finish(record, errorResponse(record.request, 'Время подтверждения истекло.', true));
     const active = records.map(([, record]) => record).filter(record => Date.now() <= record.expires);
     if (active.length >= 4 || active.some(record => record.tabId === sender.tab.id && record.frameId === sender.frameId)) throw new Error('Уже есть ожидающий запрос. Завершите или отмените его.');
     const id = crypto.randomUUID();
     const record = { id, origin, tabId: sender.tab.id, frameId: sender.frameId, instance: message.instance,
-      token: message.token, request: message.request, normalized, expires: Date.now() + TTL };
+      token: message.token, request, normalized, page, expires: Date.now() + TTL };
     await api.storage.session.set({ [PREFIX + id]: record });
     await api.alarms.create(PREFIX + id, { when: record.expires });
     try {
-      const win = await api.windows.create({ url: `${uiUrl}#${id}`, type: 'popup', width: 870, height: 850, focused: true });
+      const win = await api.windows.create({ url: `${api.runtime.getURL(page)}#${id}`, type: 'popup', width: 870, height: 850, focused: true });
       record.windowId = win.id;
       // A window closed immediately during startup must not resurrect its request.
       if (await pending(id)) await api.storage.session.set({ [PREFIX + id]: record });
@@ -86,9 +100,11 @@ async function handle(message, sender) {
     }
     return { ok: true };
   }
-  if (!isConfirmation(sender)) throw new Error('Запрос доступен только окну подтверждения расширения.');
+  const page = confirmationPage(sender);
+  if (!page) throw new Error('Запрос доступен только окну подтверждения расширения.');
   const record = await pending(message.id);
   if (!record) throw new Error('Запрос больше не действителен.');
+  if ((record.page || 'signing/approve.html') !== page) throw new Error('Запрос открыт не в своём окне подтверждения.');
   if (message.kind === 'nca:cancel') {
     await finish(record, errorResponse(record.request, 'Операция отменена пользователем.', true));
     return { ok: true };
@@ -97,9 +113,13 @@ async function handle(message, sender) {
     await finish(record, errorResponse(record.request, 'Страница закрыта, изменена или время запроса истекло.', true));
     throw new Error('Исходная страница больше не доступна.');
   }
-  const module = findModule(record.request.module);
+  const module = record.normalized.issuance ? null : findModule(record.request.module);
   if (module) enforceSettings(module, record.normalized, record.origin, (await api.storage.local.get('moduleSettings')).moduleSettings?.[module.id]);
   if (message.kind === 'nca:get' || message.kind === 'nca:validate') return { record };
+  if (message.kind === 'nca:complete' && record.normalized.issuance) {
+    await finish(record, { status: true, body: issuanceResult(record.normalized, message.result) });
+    return { ok: true };
+  }
   if (message.kind === 'nca:complete') {
     const result = assembleResult(record.normalized, message.result);
     await finish(record, successResponse(record.request, result));

@@ -7,14 +7,23 @@ const shim = fileURLToPath(new URL('crypto/browser-node-shim.js', source));
 // Test-only: maps synthetic CA fingerprints to the pinned NCA revocation URLs (served by local
 // routes in tests/e2e.mjs). Such a build goes to a separate directory and is marked in its name.
 const testIssuers = process.env.TEGIN_TEST_REVOCATION_ISSUERS ? JSON.stringify(JSON.parse(process.env.TEGIN_TEST_REVOCATION_ISSUERS)) : 'null';
-const root = testIssuers === 'null' ? new URL('../dist/', import.meta.url) : new URL(`file://${process.env.TEGIN_DIST?.replace(/\/?$/, '/')}`);
-if (testIssuers !== 'null' && !process.env.TEGIN_DIST) throw new Error('TEGIN_TEST_REVOCATION_ISSUERS requires TEGIN_DIST outside dist/.');
+// Test-only: synthetic root certificates (base64 DER) accepted for issued certificates
+// (tests/e2e-issuance.mjs). Same separation and marking as above.
+const testAnchors = process.env.TEGIN_TEST_ISSUANCE_ANCHORS ? JSON.stringify(JSON.parse(process.env.TEGIN_TEST_ISSUANCE_ANCHORS).map(value => {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) throw new Error('TEGIN_TEST_ISSUANCE_ANCHORS must be a JSON array of base64 certificates.');
+  return value;
+})) : 'null';
+const testBuild = testIssuers !== 'null' || testAnchors !== 'null';
+const root = !testBuild ? new URL('../dist/', import.meta.url) : new URL(`file://${process.env.TEGIN_DIST?.replace(/\/?$/, '/')}`);
+if (testBuild && !process.env.TEGIN_DIST) throw new Error('Test trust settings require TEGIN_DIST outside dist/.');
+if (testBuild && new URL('chromium/', root).href.startsWith(new URL('../dist/', import.meta.url).href)) throw new Error('TEGIN_DIST must be outside dist/.');
 if (testIssuers !== 'null') manifest.name += ' (test revocation build)';
+if (testAnchors !== 'null') manifest.name += ' (test issuance build)';
 for (const target of ['chromium', 'firefox']) {
   const destination = new URL(`${target}/`, root);
   await rm(destination, { recursive: true, force: true });
   await mkdir(destination, { recursive: true });
-  for (const asset of ['index.html', 'styles.css', 'theme.css', 'assets', 'modules/index.html', 'modules/modules.css', 'signing/approve.html', 'signing/approve.css', 'content/inject.js', 'content/bridge.js']) {
+  for (const asset of ['index.html', 'styles.css', 'theme.css', 'assets', 'modules/index.html', 'modules/modules.css', 'signing/approve.html', 'signing/approve.css', 'signing/issue.html', 'signing/issue.css', 'content/inject.js', 'content/bridge.js']) {
     await cp(new URL(asset, source), new URL(asset, destination), { recursive: true });
   }
   const output = structuredClone(manifest);
@@ -30,10 +39,11 @@ for (const target of ['chromium', 'firefox']) {
       'popup': fileURLToPath(new URL('popup/popup.js', source)),
       'background': fileURLToPath(new URL('background/background.js', source)),
       'signing/approve': fileURLToPath(new URL('signing/approve.js', source)),
+      'signing/issue': fileURLToPath(new URL('signing/issue.js', source)),
       'crypto/worker': fileURLToPath(new URL('crypto/worker.js', source))
     },
     outdir: fileURLToPath(destination), bundle: true, platform: 'browser', format: 'iife', target: 'chrome111',
-    minify: true, legalComments: 'eof', metafile: true, define: { __TEGIN_TEST_REVOCATION_ISSUERS__: testIssuers },
+    minify: true, legalComments: 'eof', metafile: true, define: { __TEGIN_TEST_REVOCATION_ISSUERS__: testIssuers, __TEGIN_TEST_ISSUANCE_ANCHORS__: testAnchors },
     plugins: [{ name: 'xml-canonicalization-only', setup(plugin) {
       plugin.onResolve({ filter: /^(crypto|util)$/ }, args => {
         if (args.importer.includes('xml-crypto')) return { path: shim };

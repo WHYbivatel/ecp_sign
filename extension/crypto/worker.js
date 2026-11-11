@@ -10,6 +10,15 @@ import { verifyCms, describeCms } from './cms-verify.js';
 import { verifyEmbeddedTimestamp } from './timestamp.js';
 import { A, oidValue } from './encoding.js';
 import { RevocationChecker, blocks, summarize, assessHistory, isCurrent, STATES } from './revocation.js';
+import { generateRequest, inspectCertificates, installCertificates, IssuanceError } from './issuance.js';
+import { trustStore } from './trust-store.js';
+
+// Test builds only (scripts/build.mjs with TEGIN_TEST_ISSUANCE_ANCHORS): synthetic roots accepted
+// for issued certificates next to the bundled NCA roots.
+const testIssuanceAnchors = typeof __TEGIN_TEST_ISSUANCE_ANCHORS__ !== 'undefined' ? __TEGIN_TEST_ISSUANCE_ANCHORS__ : null;
+const issuanceTrust = () => testIssuanceAnchors
+  ? { anchors: [...trustStore.filter(entry => entry.anchor).map(entry => unbase64(entry.certificate)), ...testIssuanceAnchors.map(unbase64)] } : {};
+const publicTrust = trust => ({ trusted: trust.trusted, reason: trust.reason, path: trust.path });
 
 let signer;
 let busy = false;
@@ -116,6 +125,23 @@ self.onmessage = async ({ data }) => {
         self.postMessage({ kind: 'verified', attached: verified.attached, signers, timestamps, content: content.buffer }, [content.buffer]);
       } finally { raw.fill(0); original?.fill(0); }
       self.close();
+    } else if (data.kind === 'issue-generate') {
+      let password = data.password; data.password = '';
+      const result = await generateRequest(data.request, password, data.context);
+      password = '';
+      self.postMessage({ kind: 'issue-generated', ...result });
+      self.close();
+    } else if (data.kind === 'issue-inspect') {
+      const { leaves } = await inspectCertificates(data.certificates.map(unbase64), data.pending, issuanceTrust());
+      self.postMessage({ kind: 'issue-inspected', leaves: leaves.map(({ info, recordId, trust }) => ({ recordId, certificate: info.summary, trust: publicTrust(trust) })) });
+      self.close();
+    } else if (data.kind === 'issue-install') {
+      let password = data.password; data.password = '';
+      const files = await installCertificates(data.certificates.map(unbase64), data.pending, password, issuanceTrust());
+      password = '';
+      const containers = files.map(file => file.container.buffer);
+      self.postMessage({ kind: 'issue-installed', files: files.map(({ recordId, container, certificate }) => ({ recordId, container: container.buffer, certificate })) }, containers);
+      self.close();
     } else if (data.kind === 'sign') {
       if (!signer) throw new Error('Сначала откройте ключ.');
       const request = data.request;
@@ -149,7 +175,7 @@ self.onmessage = async ({ data }) => {
   } catch (error) {
     const certificate = data.kind === 'open' ? (signer ? { ...signer.info.summary, trust } : error.certificate) : undefined;
     const diagnostic = data.kind === 'open' && !signer ? error.diagnostic : undefined;
-    self.postMessage({ kind: 'error', message: error.message || 'Операция не выполнена.', certificate, code: error.revocation ? error.code : diagnostic?.code, diagnostic });
+    self.postMessage({ kind: 'error', message: error.message || 'Операция не выполнена.', certificate, code: error.revocation || error instanceof IssuanceError ? error.code : diagnostic?.code, diagnostic });
     signer?.destroy(); signer = null;
   } finally { busy = false; }
 };

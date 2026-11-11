@@ -1,0 +1,56 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Synthetic NUC application status</title></head><body>
+<!-- Anonymized replica of the application status page: the fields read by /js/status-basics.js
+     (sha256 acbaa327…) and its setX509CertToKeystore() with jQuery replaced by DOM calls. -->
+<h1>Статус заявки: сертификат выпущен</h1>
+<input id="newDefaultPassword" type="hidden" value="synthetic-default">
+<input id="count" type="hidden" value="{{COUNT}}">
+<input id="installationStorage" type="hidden" value="PKCS12">
+<input id="installationStoragePath" type="hidden" value="">
+{{PEMS}}
+<button id="changeStatus" type="button" onclick="window.statusChanged = true">change</button>
+<script>
+var SOCKET_URL = 'wss://127.0.0.1:13579/';
+var locale = 'ru';
+window.alerts = [];
+window.alert = function (code) { window.alerts.push(code); };
+function unblockScreen() { window.unblocked = (window.unblocked || 0) + 1; }
+function connect() {
+  if (connect.webSocket && connect.webSocket.readyState < 2) return Promise.resolve(connect.webSocket);
+  return new Promise(function (resolve, reject) {
+    connect.webSocket = new WebSocket(SOCKET_URL);
+    connect.webSocket.onopen = function () { resolve(connect.webSocket); };
+    connect.webSocket.onerror = function (err) { unblockScreen(); reject(err); };
+  });
+}
+async function setX509CertToKeystore() {
+  var count = document.getElementById('count').value;
+  var pems = [];
+  for (var i = 0; i < count; i++) pems.push(document.getElementById('hiddenCertrequests:' + i + ':pem').innerHTML);
+  var importInfo = { module: 'kz.gov.pki.knca.basics', method: 'importCertificate', class: 'PKIEssentials',
+    args: { allowedStorage: document.getElementById('installationStorage').value, defaultPassword: document.getElementById('newDefaultPassword').value,
+      keystorePath: document.getElementById('installationStoragePath').value, certificates: pems, locale: locale } };
+  return connect().then(function (webSocket) {
+    webSocket.send(JSON.stringify(importInfo));
+    return new Promise(function (resolve) {
+      webSocket.onmessage = function (event) {
+        var response = JSON.parse(event.data);
+        if (response != null) {
+          if (response.status === true) {
+            var body = response.body;
+            if (body != null) {
+              unblockScreen();
+              if (body.hasOwnProperty('result')) {
+                webSocket.onmessage = null; webSocket.onclose = null; webSocket.onerror = null;
+                webSocket.close();
+                document.getElementById('changeStatus').click();
+              }
+            }
+          } else if (response.status === false) { unblockScreen(); alert(response.code); }
+        }
+        resolve(response);
+      };
+    });
+  }).catch(function (err) { unblockScreen(); });
+}
+</script>
+</body></html>
