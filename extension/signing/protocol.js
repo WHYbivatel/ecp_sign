@@ -42,7 +42,9 @@ export function normalizeRequest(input) {
   }
   if (module === BASICS && method === 'sign') {
     if (!args || typeof args !== 'object' || Array.isArray(args)) unsupported('Некорректные параметры подписания.');
-    if (args.allowedStorages != null && (!Array.isArray(args.allowedStorages) || !args.allowedStorages.includes('PKCS12'))) unsupported('Сайт не разрешает файловые ключи PKCS#12.');
+    // NUC pages build the list with split(","): an empty hidden field arrives as [""], meaning no restriction.
+    const storages = Array.isArray(args.allowedStorages) && args.allowedStorages.every(item => item === '') ? null : args.allowedStorages;
+    if (storages != null && (!Array.isArray(storages) || !storages.includes('PKCS12'))) unsupported('Сайт не разрешает файловые ключи PKCS#12.');
     const params = args.signingParams || {};
     if (typeof params !== 'object' || Array.isArray(params)) unsupported('Некорректные параметры подписи.');
     const timestamp = params.tsaProfile != null;

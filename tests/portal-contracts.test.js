@@ -230,6 +230,14 @@ test('portal-shaped requests fail explicitly instead of being weakened', () => {
     [{ module: 'kz.digiflow.mobile.extensions', method: 'getVersion' }, /не поддерживается/]
   ];
   for (const [request, message] of cases) assert.throws(() => normalizeRequest(request), message, JSON.stringify(request).slice(0, 120));
+  assert.throws(() => normalizeRequest(withArgs(egovLogin.request, { allowedStorages: ['', 'AKKaztokenStore'] })), /PKCS#12/);
+});
+
+test('an empty hidden storage field ([""] from split) leaves basics.sign unrestricted, as for generateCsr', () => {
+  const empty = normalizeRequest(withArgs(nucCabinet.request, { allowedStorages: [''] }));
+  assert.deepEqual(empty, normalizeRequest(withArgs(nucCabinet.request, { allowedStorages: undefined })));
+  assert.equal(empty.trustRequired, true);
+  assert.equal(empty.signerParams.chain.length, nucCabinet.request.args.signerParams.chain.length);
 });
 
 test('response envelopes match what the observed portal clients read', () => {
