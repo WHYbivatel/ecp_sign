@@ -1,5 +1,6 @@
-import { chromium } from 'playwright';
 import { createServer } from 'node:http';
+import { arch, platform } from 'node:os';
+import { launchExtension, extensionWorker, browserName, browserVersion } from './helpers/browser.js';
 import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join, delimiter } from 'node:path';
@@ -35,10 +36,8 @@ mkdirSync(resolve('artifacts'), { recursive: true });
 let context, sw, extensionId;
 const errors = [], escaped = [];
 async function launch(profile = 'profile') {
-  context = await chromium.launchPersistentContext(join(folder, profile), {
-    executablePath: process.env.CHROMIUM_EXECUTABLE || chromium.executablePath(), headless: true, viewport: { width: 870, height: 900 }, acceptDownloads: true,
-    args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`, '--no-first-run', `--host-resolver-rules=${NUC_HOSTS.map(host => `MAP ${host} ~NOTFOUND`).join(', ')}`]
-  });
+  context = await launchExtension(join(folder, profile), extension, { viewport: { width: 870, height: 900 },
+    args: [`--host-resolver-rules=${NUC_HOSTS.map(host => `MAP ${host} ~NOTFOUND`).join(', ')}`] });
   context.on('page', page => page.on('pageerror', error => errors.push(error.message)));
   await context.route('**/*', route => {
     const url = new URL(route.request().url());
@@ -54,7 +53,7 @@ async function launch(profile = 'profile') {
     }
     escaped.push(url.href); return route.abort();
   });
-  sw = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
+  sw = await extensionWorker(context);
   extensionId = new URL(sw.url()).host;
 }
 const CREATE = 'https://did.pki.gov.kz/service/pkiorder/create.xhtml';
@@ -72,6 +71,7 @@ const answer = page => page.evaluate(() => window.answer);
 try {
   await launch();
   assert.match(await sw.evaluate(() => chrome.runtime.getManifest().name), /test issuance build/);
+  console.log(`ENV: ${browserName} on ${platform()} ${arch()}: ${await browserVersion(context)}`);
 
   // Foreign origins and frames get a refusal immediately, without any window.
   for (const url of [`http://127.0.0.1:${port}/service/pkiorder/create.xhtml`, 'https://nca.pki.gov.kz.example.kz/service/pkiorder/create.xhtml']) {
