@@ -293,6 +293,15 @@ try {
   assert.match(await installedRow.locator('.key-meta').innerText(), /^ГОСТ 34\.10-2015 · 512 бит · № [0-9a-f]{8}$/);
   assert.equal(await pendingRow.locator('.key-state').innerText(), 'Сертификат не установлен');
   assert.equal(await pendingRow.locator('h2').innerText(), 'Заявка от 11.11.2026');
+  assert.equal(await installedRow.locator('.key-backup').count(), 0, 'an installed record has its .p12, no backup is offered');
+  const exported = keysPage.waitForEvent('download');
+  await pendingRow.locator('.key-backup').click();
+  const exportedFile = await exported;
+  assert.equal(exportedFile.suggestedFilename(), `tegin-nuc-2026-11-11-${otherId.slice(0, 8)}.tegin-request.json`);
+  const exportedPath = join(folder, 'exported.json'); await exportedFile.saveAs(exportedPath);
+  assert.deepEqual(JSON.parse(readFileSync(exportedPath, 'utf8')), other, 'the export carries the same record the request window offers');
+  await keysPage.locator('#status').filter({ hasText: 'Резервная копия сохраняется' }).waitFor();
+  await keysPage.screenshot({ path: resolve('artifacts/issuance-keys-backup.png'), fullPage: true });
   await installedRow.locator('.key-remove').click();
   assert.match(await installedRow.locator('.key-confirm').innerText(), /убедитесь, что он открывается/);
   await installedRow.locator('.key-no').click();

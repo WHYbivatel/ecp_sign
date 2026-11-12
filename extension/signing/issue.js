@@ -1,5 +1,5 @@
 import { PASSWORD_RULE, PASSWORD_HINT } from './issuance-protocol.js';
-import { STORE, validRecord, listRecords, removeRecord } from '../lib/issuance-store.js';
+import { STORE, validRecord, listRecords, removeRecord, backupName, backupJson } from '../lib/issuance-store.js';
 
 const $ = selector => document.querySelector(selector);
 const api = globalThis.browser || chrome;
@@ -96,7 +96,7 @@ async function generate() {
     finished = true; busy = false;
     resultScreen('Запрос передан на сайт НУЦ', 'Сайт продолжит подачу заявки. Ключ остаётся в этом браузере в зашифрованном виде.',
       `Ключ: ${result.algorithms.join(', ')}\nПосле одобрения заявки откройте её статус на сайте НУЦ в этом же браузере и нажмите установку сертификата: Tegin найдёт ключ и сохранит файл .p12.\nСохраните резервную копию: без неё ключ пропадёт, если очистить данные расширения. Копия зашифрована вашим паролем.`);
-    download(new Blob([JSON.stringify(record)], { type: 'application/json' }), `tegin-nuc-${record.created.slice(0, 10)}-${recordId.slice(0, 8)}.tegin-request.json`, 'Скачать резервную копию ключа заявки');
+    download(new Blob([backupJson(record)], { type: 'application/json' }), backupName(record), 'Скачать резервную копию ключа заявки');
     report();
   } catch (error) {
     busy = false; clearPassword();

@@ -15,7 +15,7 @@ h1{font-size:30px;letter-spacing:-1px;margin:0 0 8px}
 .key-state{font-size:11px;font-weight:600;border-radius:7px;padding:5px 9px;white-space:nowrap;color:var(--amber);background:var(--amber-bg)}
 .key-record[data-status=installed] .key-state{color:var(--green);background:var(--green-bg)}
 .key-record .button{font-size:12px;min-height:38px;padding:8px 14px}
-.key-remove{justify-self:start}
+.key-record .button .icon{width:16px;height:16px}
 .key-confirm{display:grid;gap:12px;padding:14px 16px;border-radius:12px;background:var(--red-bg)}
 .key-confirm p{margin:0;font-size:12px;line-height:1.65}
 .key-actions{display:flex;gap:8px;flex-wrap:wrap}

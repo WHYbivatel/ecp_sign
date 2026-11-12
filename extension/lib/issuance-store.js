@@ -24,3 +24,8 @@ export async function listRecords(api) {
 }
 
 export const removeRecord = (api, slot) => api.storage.local.remove(STORE + slot);
+
+// The backup file restores installation on any browser, so it carries the record as it was right after the request.
+export const backupName = record => `tegin-nuc-${String(record.created).slice(0, 10)}-${record.id.slice(0, 8)}.tegin-request.json`;
+export const backupJson = ({ v, id, origin, created, algorithms, identities, sealed }) =>
+  JSON.stringify({ v, id, origin, created, algorithms, identities, status: 'requested', sealed });

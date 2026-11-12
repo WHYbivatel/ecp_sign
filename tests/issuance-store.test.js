@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { listRecords, removeRecord, STORE } from '../extension/lib/issuance-store.js';
+import { listRecords, removeRecord, STORE, validRecord, backupName, backupJson } from '../extension/lib/issuance-store.js';
 
 function fakeApi(initial) {
   const data = structuredClone(initial), writes = [];
@@ -41,4 +41,14 @@ test('removing one slot leaves every other record untouched', async () => {
   await removeRecord(api, ID1);
   assert.deepEqual(Object.keys(data).sort(), [`${STORE}${ID1}~0a1b2c3d`, STORE + ID2].sort());
   assert.deepEqual(data[STORE + ID2], initial[STORE + ID2]);
+});
+
+test('a backup exported later carries the same record as the one offered right after the request', async () => {
+  const fresh = record(ID1);
+  const { api } = fakeApi({ [`${STORE}${ID1}~0a1b2c3d`]: { ...fresh, holder: 'ТЕСТОВ ТЕСТ' } });
+  const [listed] = await listRecords(api);
+  assert.equal(backupJson(listed), JSON.stringify(fresh), 'no slot, holder or local status leaks into the file');
+  assert.equal(backupJson({ ...listed, status: 'installed', installed: '2026-11-12T11:00:00.000Z' }), JSON.stringify(fresh));
+  assert.ok(validRecord(JSON.parse(backupJson(listed))));
+  assert.equal(backupName(listed), 'tegin-nuc-2026-11-12-11111111.tegin-request.json');
 });
