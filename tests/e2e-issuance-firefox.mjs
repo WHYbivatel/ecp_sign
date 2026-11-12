@@ -31,6 +31,7 @@ const ADDON_ID = JSON.parse(readFileSync(join(extension, 'manifest.json'), 'utf8
 const uuid = randomUUID();
 const BASE = `moz-extension://${uuid}`;
 const PASSWORD = 'Tegin-Test-2026';
+const LOOKALIKE = 'nca.pki.gov.kz.example.kz';
 const NUC_HOSTS = ['did.pki.gov.kz', 'nca.pki.gov.kz', 'tsp.pki.gov.kz', 'ocsp.pki.gov.kz', 'crl.pki.gov.kz', 'crl1.pki.gov.kz', 'crl.root.gov.kz'];
 const CREATE = 'https://did.pki.gov.kz/service/pkiorder/create.xhtml';
 const STATUS = 'https://did.pki.gov.kz/service/pkiorder/status.xhtml';
@@ -46,22 +47,22 @@ const browser = await puppeteer.launch({ browser: 'firefox', executablePath, hea
   env: { ...process.env, MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: '1' },
   extraPrefsFirefox: {
     'extensions.webextensions.uuids': JSON.stringify({ [ADDON_ID]: uuid }),
-    'network.dns.localDomains': NUC_HOSTS.join(','),
+    'network.dns.localDomains': [...NUC_HOSTS, LOOKALIKE].join(','),
     'browser.download.folderList': 2, 'browser.download.dir': join(folder, 'downloads'), 'browser.download.useDownloadDir': true
   } });
 
-async function portal(url) {
+async function portal(url, { adapter = true } = {}) {
   const page = await browser.newPage();
   page.on('pageerror', error => errors.push(error.message));
   await page.setRequestInterception(true);
   page.on('request', async request => {
     const target = new URL(request.url());
-    if (target.host !== 'did.pki.gov.kz') { escaped.push(target.href); return request.abort(); }
+    if (![new URL(url).host, 'did.pki.gov.kz'].includes(target.host)) { escaped.push(target.href); return request.abort(); }
     if (request.method() === 'POST') { posts.push({ path: target.pathname, body: await request.fetchPostData() }); return request.respond({ status: 204 }); }
     request.respond({ status: 200, contentType: 'text/html; charset=utf-8', body: target.pathname.includes('/status') ? statusHtml() : createPage });
   });
   await page.goto(url);
-  await page.waitForFunction(() => window.WebSocket.__ncaBrowserAdapter === true);
+  if (adapter) await page.waitForFunction(() => window.WebSocket.__ncaBrowserAdapter === true);
   return page;
 }
 // Puppeteer keeps the about:blank URL of a window the extension opened, so windows are matched by their own location.
@@ -70,7 +71,7 @@ async function extensionWindow(path, known) {
     for (const candidate of await browser.pages()) {
       if (known.has(candidate)) continue;
       const href = await candidate.evaluate(() => location.href).catch(() => '');
-      if (href.startsWith(`${BASE}/${path}#`)) { candidate.on('pageerror', error => errors.push(error.message)); return candidate; }
+      if (href === `${BASE}/${path}` || href.startsWith(`${BASE}/${path}#`)) { candidate.on('pageerror', error => errors.push(error.message)); return candidate; }
     }
     await new Promise(done => setTimeout(done, 50));
   }
@@ -86,8 +87,8 @@ const visible = (page, selector) => page.waitForSelector(selector, { visible: tr
 const textOf = (page, selector) => page.$eval(selector, node => node.innerText);
 async function fill(page, selector, value) { await page.$eval(selector, node => { node.value = ''; }); await page.type(selector, value); }
 // The file is taken from where Firefox saved it after the user's click (the page CSP rightly blocks reading the blob).
-async function download(page) {
-  const link = await visible(page, '#downloads a');
+async function download(page, selector = '#downloads a') {
+  const link = await visible(page, selector);
   const name = await page.evaluate(node => node.download, link);
   const path = join(folder, 'downloads', name);
   await link.click();
@@ -107,10 +108,19 @@ try {
   assert.equal(await browser.installExtension(extension), ADDON_ID);
   const version = await browser.version();
   console.log(`ENV: firefox on ${platform()} ${arch()}: ${version} (${await browser.userAgent()})`);
+  // A look-alike host gets the refusal at once, without a window.
+  const lookalike = await portal(`https://${LOOKALIKE}/service/pkiorder/create.xhtml`, { adapter: false });
+  const windows = (await browser.pages()).length;
+  assert.deepEqual(await lookalike.evaluate(() => createCertRequest()), { status: false, code: 'ORIGIN_NOT_ALLOWED', message: 'Выпуск ключей доступен только на сайте НУЦ РК.' });
+  assert.deepEqual(await lookalike.evaluate(() => window.alerts), ['ORIGIN_NOT_ALLOWED']);
+  await new Promise(done => setTimeout(done, 500));
+  assert.equal((await browser.pages()).length, windows);
+  await lookalike.close();
+
   const page = await portal(CREATE);
   let popup = await startPopup(page, 'createCertRequest', 'signing/issue.html');
   assert.match(await popup.evaluate(() => browser.runtime.getManifest().name), /test issuance build/);
-  console.log('PASS: the Firefox build loads as a WebExtension, injects the NCALayer adapter and opens its window from the portal call');
+  console.log('PASS: the Firefox build loads as a WebExtension; a look-alike host is refused without a window; on the portal the NCALayer adapter opens its window');
   await visible(popup, '#request-panel:not([hidden])');
   const shown = await textOf(popup, '#subject');
   for (const value of ['ТЕСТОВ ТЕСТ', 'IIN000000000000', 'ТОО «ҚАЗАҚ СИНТЕТИКА»']) assert.ok(shown.includes(value), value);
@@ -128,12 +138,29 @@ try {
   const backup = await download(popup);
   assert.match(backup.name, /\.tegin-request\.json$/);
   const stored = await records(popup);
-  await popup.close(); await page.close();
   assert.equal(stored.length, 1);
   assert.equal(stored[0].sealed.cipher, 'AES-256-GCM');
   assert.deepEqual(JSON.parse(Buffer.from(backup.bytes).toString()), stored[0]);
   assert.ok(!JSON.stringify(stored).includes(PASSWORD) && !JSON.stringify(stored).includes('synthetic-default'));
   console.log('PASS: the application key is generated in the extension; the page gets only the PKCS#10 PEM; only the encrypted key and its backup are kept');
+
+  // «Ключи заявок» exports the same backup for the pending request; after deletion only that file is left.
+  rmSync(backup.path);
+  let known = new Set(await browser.pages());
+  await popup.evaluate(() => browser.tabs.create({ url: '/keys/index.html' }));
+  const keys = await extensionWindow('keys/index.html', known);
+  await popup.close(); await page.close();
+  await visible(keys, '.key-record[data-status=requested]');
+  const exported = await download(keys, '.key-backup');
+  assert.equal(exported.name, backup.name);
+  assert.deepEqual(JSON.parse(Buffer.from(exported.bytes).toString()), stored[0]);
+  await keys.click('.key-remove');
+  assert.match(await textOf(keys, '.key-confirm'), /только из резервной копии ключа заявки/);
+  await keys.click('.key-yes');
+  await keys.waitForSelector('#empty:not([hidden])', { timeout: 15000 });
+  assert.deepEqual(await records(keys), []);
+  await keys.close();
+  console.log('PASS: the application keys page downloads the backup of the pending request (same file as after the request) and deletes the record after confirmation');
 
   const csr = unbase64(generated.body.pems[0].split('\n').filter(line => line && !line.startsWith('-----')).join(''));
   const leaf = issueFromCsr(ca, csr);
@@ -141,6 +168,14 @@ try {
   const status = await portal(STATUS);
   popup = await startPopup(status, 'setX509CertToKeystore', 'signing/issue.html');
   await visible(popup, '.issue-certificate');
+  assert.match(await textOf(popup, '#certificates'), /Ключ для этого сертификата в этом браузере не найден/);
+  // input.setFiles is refused in privileged contexts; the same File reaches the input through DataTransfer.
+  await popup.evaluate((bytes, name) => {
+    const transfer = new DataTransfer(); transfer.items.add(new File([Uint8Array.from(bytes)], name, { type: 'application/json' }));
+    const input = document.querySelector('#backup-file'); input.files = transfer.files; input.dispatchEvent(new Event('change', { bubbles: true }));
+  }, Array.from(exported.bytes), exported.name);
+  await popup.waitForFunction(() => document.querySelector('#status')?.textContent.includes('Резервная копия добавлена.'), { timeout: 15000 });
+  await popup.waitForFunction(() => document.querySelector('#certificates').innerText.includes('Ключ заявки найден в этом браузере'), { timeout: 15000 });
   const card = await textOf(popup, '#certificates');
   assert.match(card, /Цепочка до корня НУЦ РК подтверждена/);
   assert.match(card, /Ключ заявки найден в этом браузере/);
@@ -161,15 +196,14 @@ try {
   await popup.close();
   const reopened = await openContainer(new Uint8Array(p12.bytes), PASSWORD);
   try { assert.equal(reopened.info.raw, der(parse(leaf.der))); } finally { reopened.destroy(); }
-  console.log('PASS: wrong password refused, retry installs; chain and key checked; the .p12 is saved before the portal is told and reopens with the issued certificate');
+  console.log('PASS: the key restored from the exported backup installs; wrong password refused, retry installs; chain and key checked; the .p12 is saved before the portal is told and reopens with the issued certificate');
 
   await status.evaluate(() => new Promise(done => { window.socket = new WebSocket('wss://127.0.0.1:13579'); window.socket.onopen = done; }));
   const content = 'Тестовый документ после выпуска ЭЦП';
-  const known = new Set(await browser.pages());
+  known = new Set(await browser.pages());
   await status.evaluate(message => { window.signed = new Promise(done => { window.socket.onmessage = event => done(JSON.parse(event.data)); }); window.socket.send(JSON.stringify(message)); },
     { module: 'kz.gov.pki.knca.basics', method: 'sign', args: { allowedStorages: ['PKCS12'], format: 'cms', data: Buffer.from(content).toString('base64'), signingParams: { decode: true, encapsulate: true }, signerParams: { extKeyUsageOids: [], chain: [root.pem] }, locale: 'ru' } });
   const signing = await extensionWindow('signing/approve.html', known);
-  // input.setFiles is refused in privileged contexts; the same File reaches the input through DataTransfer.
   await signing.waitForSelector('#key-file');
   await signing.evaluate((bytes, name) => {
     const transfer = new DataTransfer(); transfer.items.add(new File([Uint8Array.from(bytes)], name, { type: 'application/x-pkcs12' }));
