@@ -123,7 +123,7 @@ try {
   }, readFileSync(join(extension, 'content', 'inject.js'), 'utf8'));
   assert.equal(await hardware.evaluate(() => document.documentElement.getAttribute('data-tegin-conflict')), 'legacy');
   await sitePopup.reload();
-  assert.equal(await sitePopup.locator('#site-state').textContent(), 'Конфликт версий');
+  await sitePopup.locator('#site-state').filter({ hasText: /^Конфликт версий$/ }).waitFor({ timeout: 10000 });
   await sitePopup.close();
   await hardware.close();
   storages = 'PKCS12,AKKaztokenStore,AKKZIDCardStore';
