@@ -59,9 +59,9 @@ export const catalog = [
   {
     "name": "ezSigner",
     "symname": "kz.gov.pki.cms.NLDocSignerModule",
-    "version": "1.2.1",
-    "url": "https://ezsigner.kz/updates/NLDocSignerModule-1.2.1-jar-with-dependencies.jar",
-    "hash": "2537455f3d9cf49acd191fbaa4af02bda1679448db09571ffefd38dcdae26bec"
+    "version": "1.2.2",
+    "url": "https://ezsigner.kz/updates/NLDocSignerModule-1.2.2-jar-with-dependencies.jar",
+    "hash": "9ace4f5d91fc988ecbea092829306b5e7ca09a375fe8d78fa03c556cafc919b6"
   },
   {
     "name": "Модуль EFIS.KZ",
@@ -185,9 +185,9 @@ export const catalog = [
   {
     "name": "SimBASE",
     "symname": "kz.Simourg.SimBASE",
-    "version": "2.2",
-    "url": "https://simourg.com/sim/kz/ncalayer/SimbaseNcaLayerBundle-2.2.jar",
-    "hash": "8ce213920569de23411808dc411a080ff5559e6d052cb988749781e28d4e5e6f"
+    "version": "2.4",
+    "url": "https://simourg.com/sim/kz/ncalayer/SimbaseNcaLayerBundle-2.4.jar",
+    "hash": "93d4d25d7e1fe3754bb76bcf78a289db701a802c21c1e440a26fd9b36829e2ce"
   },
   {
     "name": "eFactoring",
@@ -335,13 +335,20 @@ export const catalog = [
     "version": "1.0",
     "url": "https://cabinet-api.idocs.kz/esedo/ncalayer/idocs-bundle-1.0.jar",
     "hash": "2667e828af21eca25d7becf276a8c08aee13ecc3a2d5014680c8f3068894bc14"
+  },
+  {
+    "name": "OnaiDocs Sign Bundle",
+    "symname": "onaidocs-sign-bundle",
+    "version": "1.1.0",
+    "url": "https://onaidocs.kz/var/stories/onaidocs-sign-bundle-1.1.0.jar",
+    "hash": "6549a74d4ed8474d330c00873672148eece08a139422a8c49e26643e5cfd190a"
   }
 ];
 export const catalogEvidence = {
-  "date": "2026-10-29",
+  "date": "2026-11-12",
   "source": "https://crl.pki.gov.kz/updates/ncalayer.der",
-  "sha256": "765376a94dde29f4b075c7eacae359e652652c64bfd73464fcf3cba69f1fdefe",
+  "sha256": "4039802fb5cb2ee54c11a30f6d98a4aeca8fb36fc122717cf9bebbb02d675a44",
   "signatureVerified": true,
   "signerFingerprint": "d42152f8c464ae34cee899ba765c5a75186b1ffac98b2c9cdff76fbbd9ec7a3d",
-  "count": 47
+  "count": 48
 };

@@ -9,7 +9,7 @@
 // knca_provider_util-0.8.8.jar from ncalayer.zip; NCA_CORE: core classes (slf4j). NCA_NURSIGN_JAR (optional): the module JAR, checked
 // against the catalog hash and for the createXmlSignature call. Synthetic keys created by Kalkan.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, delimiter } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -24,7 +24,15 @@ import { assembleResult } from '../extension/modules/adapters.js';
 const bundles = process.env.NCA_BUNDLES;
 if (!bundles) { console.log('SKIP: set NCA_BUNDLES to the kncabundles folder of ncalayer.zip'); process.exit(0); }
 // NCA_CORE: NCALayer core classes extracted from ncalayer.sh (slf4j, org.json), as for tests/ncalayer-password-reference.mjs.
-const classpath = [...['kalkancrypt-0.7.8.jar', 'kalkancrypt_xmldsig-osgi-0.4.jar', 'knca_provider_util-0.8.8.jar'].map(name => join(bundles, name)), ...(process.env.NCA_CORE ? [process.env.NCA_CORE] : [])].join(delimiter);
+// One jar of each, whatever the version: the archive set (XMLDSig 0.4, util 0.8.8) or the updated one (0.5.2, 0.9.2).
+const jar = prefix => {
+  const found = readdirSync(bundles).filter(name => name.startsWith(prefix) && name.endsWith('.jar'));
+  if (found.length !== 1) throw new Error(`${bundles}: expected one ${prefix}*.jar, found ${found.length}`);
+  return join(bundles, found[0]);
+};
+const jars = [jar('kalkancrypt-'), jar('kalkancrypt_xmldsig'), jar('knca_provider_util')];
+console.log(`ENV: ${jars.map(path => path.split(/[\\/]/).pop()).join(', ')}`);
+const classpath = [...jars, ...(process.env.NCA_CORE ? [process.env.NCA_CORE] : [])].join(delimiter);
 const folder = mkdtempSync(join(tmpdir(), 'tegin-nursign-'));
 const PASSWORD = 'Tegin-NurSign-2026';
 const DSIG = 'http://www.w3.org/2000/09/xmldsig#';

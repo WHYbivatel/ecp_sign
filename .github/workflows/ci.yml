@@ -198,12 +198,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .kalkan
-          key: kalkan-xml-0.7.8-5588f9ae-72c273d3-613e8ecf-49c4af31
+          key: kalkan-xml-0.7.8-5588f9ae-72c273d3-613e8ecf-49c4af31-current-6bb88c85-a7defbfb
       - run: node scripts/fetch-kalkan.mjs .kalkan --xml >> "$GITHUB_ENV"
       # Kalkan XMLDSig: CMS/CAdES, whole-document and XPath XML, co-signatures, portal payloads.
       - run: node tests/kalkan-crosscheck.mjs
       # XMLUtil.verifyXmlSignature: NURSign xml contract, XPath co-signing RSA + GOST-512.
       - run: node tests/nursign-xml-crosscheck.mjs
+      # An installed NCALayer updates itself to the versions in the signed catalog (XMLDSig 0.5.2, util 0.9.2).
+      - name: The same against the bundles an installed NCALayer updates to
+        run: |
+          set -a; eval "$(node scripts/fetch-kalkan.mjs .kalkan --current)"; set +a
+          node tests/kalkan-crosscheck.mjs
+          node tests/nursign-xml-crosscheck.mjs
 
   package:
     name: packaged archives · ubuntu

@@ -5,6 +5,9 @@
 //        node scripts/fetch-kalkan.mjs <folder> --xml  → also knca_provider_util (the official XMLUtil) and the
 //        slf4j API classes it loads; prints NCA_KALKAN_JARS, NCA_BUNDLES and NCA_CORE lines for $GITHUB_ENV
 //        (tests/nursign-xml-crosscheck.mjs). NCA_ARCHIVE: a local copy of ncalayer.zip instead of the download.
+//        node scripts/fetch-kalkan.mjs <folder> --current  → as --xml, but NCA_KALKAN_JARS and NCA_BUNDLES point to
+//        <folder>/current: the XMLDSig and knca_provider_util versions an installed NCALayer updates itself to, taken
+//        from the update server and checked against the SHA-256 in the signed catalog snapshot (catalog.js).
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -20,7 +23,8 @@ const JARS = {
 // org/slf4j/impl binding (no logging backend is loaded). Pinned as one digest over the sorted entries.
 const XML_JAR = ['knca_provider_util-0.8.8.jar', '613e8ecf564549e5ebcef6df5d0c03a027cbcbe4c19ead02f6d336e47cd9d1c5'];
 const SLF4J = '49c4af31f3eacfb32cfe14ff38047f063b2928c23ea52591c650f1c6c220412d';
-const xml = process.argv.includes('--xml');
+const current = process.argv.includes('--current');
+const xml = current || process.argv.includes('--xml');
 const folder = resolve(process.argv.slice(2).find(arg => !arg.startsWith('--')) || '.kalkan');
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const slf4jEntries = core => core.names().filter(name => name.startsWith('org/slf4j/') && name.endsWith('.class') && !name.startsWith('org/slf4j/impl/')).sort();
@@ -69,5 +73,26 @@ if (!await ready()) {
   }
 }
 if (!await ready()) throw new Error('Kalkan jars failed verification');
-const kalkan = paths.slice(0, Object.keys(JARS).length).join(delimiter);
-console.log(xml ? `NCA_KALKAN_JARS=${kalkan}\nNCA_BUNDLES=${folder}\nNCA_CORE=${coreFolder}` : kalkan);
+if (current) {
+  const { catalog } = await import('../extension/modules/catalog.js');
+  const currentFolder = join(folder, 'current');
+  await mkdir(currentFolder, { recursive: true });
+  await writeFile(join(currentFolder, 'kalkancrypt-0.7.8.jar'), await readFile(paths[0]));
+  const updated = [];
+  for (const symname of ['kz.gov.pki.kalkan.xmldsig', 'kz.gov.pki.provider.knca_provider_util']) {
+    const entry = catalog.find(item => item.symname === symname);
+    const path = join(currentFolder, entry.url.split('/').pop());
+    if (!existsSync(path) || sha256(await readFile(path)) !== entry.hash) {
+      const response = await fetch(entry.url, { headers: { 'User-Agent': 'Mozilla/5.0 (Tegin CI)' } });
+      if (!response.ok) throw new Error(`${entry.url}: HTTP ${response.status}`);
+      const jar = Buffer.from(await response.arrayBuffer());
+      if (sha256(jar) !== entry.hash) throw new Error(`${entry.url}: SHA-256 ${sha256(jar)} differs from the signed catalog ${entry.hash}`);
+      await writeFile(path, jar);
+    }
+    updated.push(path);
+  }
+  console.log(`NCA_KALKAN_JARS=${[join(currentFolder, 'kalkancrypt-0.7.8.jar'), updated[0]].join(delimiter)}\nNCA_BUNDLES=${currentFolder}\nNCA_CORE=${coreFolder}`);
+} else {
+  const kalkan = paths.slice(0, Object.keys(JARS).length).join(delimiter);
+  console.log(xml ? `NCA_KALKAN_JARS=${kalkan}\nNCA_BUNDLES=${folder}\nNCA_CORE=${coreFolder}` : kalkan);
+}
