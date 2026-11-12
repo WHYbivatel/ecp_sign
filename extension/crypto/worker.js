@@ -8,7 +8,7 @@ import { verifyChain } from './chain.js';
 import { forge, bytes as binaryBytes } from './encoding.js';
 import { verifyCms, describeCms } from './cms-verify.js';
 import { verifyEmbeddedTimestamp, requestTimestamp, TSA_PROFILES } from './timestamp.js';
-import { signLongTerm, verifyLongTerm, checkLongTermKey, LT_OIDS } from './cades-lt.js';
+import { signLongTerm, verifyLongTerm, checkLongTermKey, embeddedValidationData, longTermReport, LT_OIDS } from './cades-lt.js';
 import { A, oidValue } from './encoding.js';
 import { RevocationChecker, blocks, summarize, assessHistory, isCurrent, STATES } from './revocation.js';
 import { generateRequest, inspectCertificates, installCertificates, IssuanceError } from './issuance.js';
@@ -35,6 +35,10 @@ function checkConstraints(request) {
 }
 const revocation = () => checker ||= new RevocationChecker();
 const notChecked = reason => summarize([], new Date().toISOString(), reason);
+// CMS accepted by verifyCms but not strict DER carries no CAdES-LT data Tegin can report on.
+function hasRevocationData(cms) {
+  try { const embedded = embeddedValidationData(cms); return embedded.crls + embedded.ocsp > 0; } catch { return false; }
+}
 const REVOCATION_MESSAGES = {
   revoked: subject => `${subject} отозван. Операция заблокирована.`,
   unknown: subject => `${subject}: служба НУЦ сообщила, что статус неизвестен. Операция заблокирована.`,
@@ -123,6 +127,7 @@ self.onmessage = async ({ data }) => {
       try {
         const verified = await verifyCms(raw, { detached: original });
         const timestamps = [], signers = [];
+        let longTerm = null;
         for (const signer of verified.signers) {
           const unsigned = signer.info.value.find(node => node.tagClass === A.Class.CONTEXT_SPECIFIC && node.type === 1);
           const stamps = (unsigned?.value || []).filter(attribute => oidValue(attribute.value[0]) === '1.2.840.113549.1.9.16.2.14');
@@ -135,15 +140,22 @@ self.onmessage = async ({ data }) => {
               revocation: data.checkRevocation ? await revocation().checkPath(verifiedStamp.certificates) : notChecked('not-requested') };
             timestamps.push(stamp);
           }
-          if ((unsigned?.value || []).some(attribute => oidValue(attribute.value[0]) === LT_OIDS.archiveTimestampV3)) {
-            for (const archive of (await verifyLongTerm(raw, { detached: original })).archives) timestamps.push({ kind: 'archive', time: archive.time, authority: archive.authority,
-              revocation: data.checkRevocation ? await revocation().checkPath(archive.certificates) : notChecked('not-requested') });
+          const archived = (unsigned?.value || []).some(attribute => oidValue(attribute.value[0]) === LT_OIDS.archiveTimestampV3);
+          if (archived || (verified.signers.length === 1 && hasRevocationData(raw))) {
+            const checked = await verifyLongTerm(raw, { detached: original });
+            const archiveRevocations = [];
+            for (const archive of checked.archives) {
+              const status = data.checkRevocation ? await revocation().checkPath(archive.certificates) : notChecked('not-requested');
+              archiveRevocations.push(status);
+              timestamps.push({ kind: 'archive', time: archive.time, authority: archive.authority, revocation: status });
+            }
+            longTerm = longTermReport(checked, { signatureTimestamp: stamp, archiveRevocations });
           }
           const current = !data.checkRevocation ? notChecked('not-requested') : signer.trust.trusted ? await revocation().checkPath(signer.trust.certificates) : notChecked('untrusted');
           signers.push({ ...signer.certificate.summary, trust: { ...signer.trust, revocation: current }, history: assessHistory(current, stamp) });
         }
         const content = verified.content.slice();
-        self.postMessage({ kind: 'verified', attached: verified.attached, signers, timestamps, content: content.buffer }, [content.buffer]);
+        self.postMessage({ kind: 'verified', attached: verified.attached, signers, timestamps, longTerm, content: content.buffer }, [content.buffer]);
       } finally { raw.fill(0); original?.fill(0); }
       self.close();
     } else if (data.kind === 'issue-generate') {

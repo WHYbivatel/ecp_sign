@@ -194,10 +194,33 @@ async function verifyLongTermRaw(cms, { detached, anchors } = {}) {
     covers(values, await Promise.all(earlier.map(hash)), 'неподписанные атрибуты');
     // The time-stamp's own imprint algorithm hashes the content, as EN 319 122-1 and EU DSS do.
     const verified = await verifyEmbeddedTimestamp(parse(token), await archiveInput(sd, signer, signed, imprintAlgorithm(token), whole(index)), { anchors });
-    archives.push({ time: verified.time, authority: verified.authority, certificates: verified.certificates });
+    archives.push({ time: verified.time, authority: verified.authority, certificates: verified.certificates, hashAlgorithm: hashOid,
+      covers: { certificates: certificates.length, revocation: crls.length, attributes: values.length } });
   }
+  return { ...countEvidence(sd), archives };
+}
+function countEvidence(sd) {
   const ocsp = sd.crls.filter(node => node.tag === 0xa1).length;
-  return { certificates: sd.certificates.length, crls: sd.crls.length - ocsp, ocsp, archives };
+  return { certificates: sd.certificates.length, crls: sd.crls.length - ocsp, ocsp };
+}
+// Validation data embedded in SignedData, counted without verifying anything.
+export function embeddedValidationData(cms) {
+  try { return countEvidence(signedDataOf(cms)); } catch (error) { if (error instanceof DerError) malformed(); throw error; }
+}
+
+// What a long-term verification established, for the verify screen. The revocation status at the time
+// of a time-stamp is not derived from the embedded OCSP/CRL, so `historical.computed` is always false;
+// archive time-stamp renewal is not offered.
+export function longTermReport(verified, { signatureTimestamp, archiveRevocations = [] }) {
+  const level = verified.archives.length ? 'LTA' : signatureTimestamp && verified.crls + verified.ocsp > 0 ? 'LT' : null;
+  return {
+    level,
+    embedded: { certificates: verified.certificates, crls: verified.crls, ocsp: verified.ocsp },
+    archives: verified.archives.map((archive, index) => ({ index: index + 1, time: archive.time, authority: archive.authority,
+      hashAlgorithm: archive.hashAlgorithm, covers: { ...archive.covers }, revocation: archiveRevocations[index] })),
+    historical: { computed: false },
+    renewal: false
+  };
 }
 
 export function addValidationData(...args) {

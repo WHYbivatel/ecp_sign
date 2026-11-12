@@ -11,6 +11,7 @@ import { longTermHarness } from './helpers/long-term.js';
 import { signLongTerm } from '../extension/crypto/cades-lt.js';
 import { requestTimestamp, TSA_PROFILES } from '../extension/crypto/timestamp.js';
 import { RevocationChecker, memoryStore } from '../extension/crypto/revocation.js';
+import { HISTORICAL_NOT_COMPUTED } from '../extension/lib/verification-text.js';
 import { verifyCms } from '../extension/crypto/cms-verify.js';
 import { forge, oid, der } from '../extension/crypto/encoding.js';
 import { openContainer } from '../extension/crypto/signer.js';
@@ -600,8 +601,13 @@ try {
     await tool.locator('#document').setInputFiles(join(folder, 'archive.p7s'));
     await tool.locator('#verify-submit').click();
     await tool.locator('#result-title').filter({ hasText: 'Подпись верна' }).waitFor();
-    assert.match(await tool.locator('#result-details').textContent(), /Метка времени: .*\n.*\nАрхивная метка времени: /);
-    console.log('PASS: CAdES-LTA with live NUC RSA time-stamps: the extension verifies the archive-time-stamp-v3 offline and labels it');
+    const archiveDetails = await tool.locator('#result-details').textContent();
+    assert.match(archiveDetails, /Метка времени: .*\n.*\n\nCAdES-LTA: в подпись встроены сертификаты \(\d+\), ответы OCSP \(\d+\) и списки отзыва \(\d+\)\./);
+    assert.match(archiveDetails, /Архивная метка 1 из 1: .+ · SHA-256\nПроверена: подпись службы меток и её цепочка НУЦ; .+\nСертификат службы меток сейчас: не проверялся/);
+    assert.ok(archiveDetails.includes(HISTORICAL_NOT_COMPUTED), 'historical revocation status is reported as not computed');
+    assert.doesNotMatch(archiveDetails, /(на момент|в момент)[^.\n]*(не отозван|подтвержд|действителен)/i);
+    assert.match(archiveDetails, /Продлить архивную метку в Tegin пока нельзя\./);
+    console.log('PASS: CAdES-LTA with live NUC RSA time-stamps: the extension verifies the archive-time-stamp-v3 offline, lists it and reports the historical status as not computed');
   }
   // Password change: refusals first, then a copy that opens with the new password only and keeps key and certificates.
   const passwordTool = await context.newPage();

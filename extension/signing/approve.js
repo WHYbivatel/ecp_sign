@@ -1,5 +1,6 @@
 import { serviceOperation, keyInfoResult } from '../lib/operation-summary.js';
 import { base64, unbase64, bytes as binaryBytes } from '../lib/bytes.js';
+import { dateTime, REVOCATION_LABELS, revocationNote, revocationTechnical, verificationText } from '../lib/verification-text.js';
 
 const $ = selector => document.querySelector(selector);
 const api = globalThis.browser || chrome;
@@ -12,39 +13,12 @@ let signatureInfo, createdSignature, createdName = '', viewAnimation, pdfInspect
 const status = $('#status');
 const sizeLabel = count => count < 1024 ? `${count} Б` : `${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(count / 1024)} КБ`;
 const hex = value => [...value].map(byte => byte.toString(16).padStart(2, '0')).join('');
-const dateTime = value => new Date(value).toLocaleString('ru-RU');
 const isPdf = data => new TextDecoder('latin1').decode(data.subarray(0, 1024)).includes('%PDF-');
 const FORMAT_HELP = 'Документ будет сохранён вместе с подписью (.p7s).';
 const LONG_TERM_HELP = 'CAdES-LT добавляет к подписи с меткой времени НУЦ цепочки сертификатов и ответы OCSP/CRL, полученные после метки; CAdES-LTA сверху ставит архивную метку времени. Нужен ключ RSA с цепочкой НУЦ РК: для ГОСТ форматы пока не открыты, нет независимого валидатора с казахстанскими OID. Документ остаётся внутри подписи (.p7s).';
 const PADES_HELP = 'Подпись будет встроена в PDF (PAdES-B-B). Tegin сохранит новый файл .signed.pdf. В подписанный PDF подпись добавляется отдельной ревизией, прежние подписи не меняются; зашифрованные и заверенные (DocMDP) PDF не подписываются.';
 
-const REVOCATION_LABELS = { good: 'Не отозван по актуальным данным', revoked: 'Отозван', unknown: 'Статус неизвестен', 'not-checked': 'Не проверялся', unavailable: 'Проверка недоступна' };
-const REVOCATION_SOURCES = { ocsp: 'OCSP НУЦ', crl: 'список отзыва (CRL)', 'crl+delta': 'список отзыва (CRL + delta)' };
-const REASONS = { keyCompromise: 'компрометация ключа', cACompromise: 'компрометация УЦ', affiliationChanged: 'изменение сведений', superseded: 'заменён', cessationOfOperation: 'прекращение деятельности', certificateHold: 'приостановлен', privilegeWithdrawn: 'отзыв полномочий', unspecified: 'причина не указана' };
 const revocationBlocks = result => !result || result.state === 'revoked' || (result.required && result.state !== 'good');
-function revocationNote(result) {
-  if (!result) return '';
-  const revoked = result.certificates?.find(entry => entry.state === 'revoked');
-  if (result.state === 'good') return `Проверено ${dateTime(result.checkedAt)} по данным НУЦ для всей цепочки. Статус относится к моменту проверки.`;
-  if (result.state === 'revoked') return `${revoked.role === 'ca' ? 'Сертификат УЦ в цепочке' : 'Сертификат'} отозван${revoked.revocationTime ? ' ' + dateTime(revoked.revocationTime) : ''}${revoked.reason ? ' (' + (REASONS[revoked.reason] || revoked.reason) + ')' : ''}. Операция заблокирована.`;
-  if (result.state === 'unknown') return result.certificates.some(entry => entry.detail === 'not-issued') ? 'НУЦ сообщает, что такой сертификат им не выдавался. Операция заблокирована.' : 'Служба НУЦ не знает этот сертификат. Операция заблокирована.';
-  if (result.state === 'unavailable') return 'Службы НУЦ не ответили или их ответ не прошёл проверку. Это не подтверждает, что сертификат действителен. Повторите позже.';
-  if (result.reason === 'untrusted') return 'Цепочка доверия не подтверждена, поэтому статус отзыва проверить не у кого.';
-  if (result.reason === 'not-requested') return 'Онлайн-проверка отзыва не запрашивалась.';
-  if (result.reason === 'pending') return 'Проверка отзыва не выполнялась: операция остановлена раньше.';
-  return 'Для УЦ этой цепочки нет проверенных адресов служб отзыва. Подтверждайте операцию, только если доверяете этому сертификату.';
-}
-function revocationTechnical(result) {
-  if (!result?.certificates?.length) return REVOCATION_LABELS[result?.state || 'not-checked'];
-  return result.certificates.map(entry => `${entry.name}: ${REVOCATION_LABELS[entry.state]}${entry.source ? ' · ' + REVOCATION_SOURCES[entry.source] : ''}${entry.thisUpdate ? ' · данные от ' + dateTime(entry.thisUpdate) : ''}${entry.code ? ' · ' + entry.code : ''}`).join('\n');
-}
-function historyNote(history) {
-  if (!history) return '';
-  if (history.relation === 'revoked-after-timestamp') return `Сертификат отозван ${dateTime(history.revocationTime)}, позже метки времени ${dateTime(history.timestamp)}: метка подтверждает, что подпись существовала до отзыва.`;
-  if (history.relation === 'revoked-before-timestamp') return `Сертификат отозван ${dateTime(history.revocationTime)}, раньше метки времени ${dateTime(history.timestamp)}: на момент метки он уже был отозван.`;
-  if (history.relation === 'signing-time-unproven') return `Сертификат отозван${history.revocationTime ? ' ' + dateTime(history.revocationTime) : ''}. В подписи нет метки времени, поэтому момент подписания не подтверждён и относительно отзыва не определён.`;
-  return '';
-}
 
 async function message(kind, extra = {}) {
   const reply = await api.runtime.sendMessage({ kind, id, ...extra });
@@ -347,7 +321,7 @@ $('#key-form').addEventListener('submit', async event => {
           const stamp = data.timestamps?.[0];
           const name = (localName || 'document').replace(/[\\/]/g, '_');
           resultScreen({ title: pades ? 'PDF подписан' : 'Документ подписан', description: 'Сохраните результат на своё устройство.',
-            details: `${localName}${pades ? '\nPAdES-B-B · подпись внутри PDF' : ''}\n${certificate.name}\nСтатус отзыва: ${REVOCATION_LABELS[certificate.trust?.revocation?.state || 'not-checked'].toLowerCase()}\n${stamp ? 'Метка НУЦ: ' + new Date(stamp.time).toLocaleString('ru-RU') : 'Подпись создана локально, без метки времени.'}${request.longTerm ? `\nCAdES-${request.longTerm.toUpperCase()} · данные OCSP/CRL встроены${data.timestamps.some(item => item.kind === 'archive') ? ', архивная метка проверена' : ''}` : ''}`,
+            details: `${localName}${pades ? '\nPAdES-B-B · подпись внутри PDF' : ''}\n${certificate.name}\nСтатус отзыва: ${REVOCATION_LABELS[certificate.trust?.revocation?.state || 'not-checked'].toLowerCase()}\n${stamp ? 'Метка НУЦ: ' + new Date(stamp.time).toLocaleString('ru-RU') : 'Подпись создана локально, без метки времени.'}${request.longTerm ? `\nCAdES-${request.longTerm.toUpperCase()} · данные OCSP/CRL встроены${data.timestamps.some(item => item.kind === 'archive') ? ', архивная метка проверена; статус отзыва на момент меток не вычислялся' : ''}` : ''}`,
             download: new Blob([value], { type: xml ? 'application/xml' : pades ? 'application/pdf' : 'application/pkcs7-mime' }),
             filename: pades ? name.replace(/\.pdf$/i, '') + '.signed.pdf' : name + (xml ? '.signed.xml' : '.p7s'),
             downloadLabel: pades ? 'Скачать подписанный PDF' : undefined });
@@ -392,17 +366,9 @@ async function verifySelected() {
     startWorker(current, async data => {
       if (data.kind !== 'verified') return;
       const content = new Uint8Array(data.content);
-      const trusted = data.signers.every(signer => signer.trust.trusted);
-      const states = [...data.signers.map(signer => signer.trust.revocation), ...data.timestamps.map(stamp => stamp.revocation)].map(result => result?.state || 'not-checked');
-      const revoked = states.includes('revoked');
-      const details = data.signers.map(signer => [signer.name, signer.algorithm, signer.trust.trusted ? 'Цепочка НУЦ РК подтверждена' : 'Цепочка доверия не подтверждена',
-        `Статус отзыва сейчас: ${REVOCATION_LABELS[signer.trust.revocation.state].toLowerCase()}`, historyNote(signer.history) || revocationNote(signer.trust.revocation)].filter(Boolean).join('\n')).join('\n\n');
-      const stamps = data.timestamps.map(stamp => `${stamp.kind === 'archive' ? 'Архивная метка времени' : 'Метка времени'}: ${dateTime(stamp.time)}\nСертификат службы меток: ${REVOCATION_LABELS[stamp.revocation.state].toLowerCase()}`).join('\n');
-      resultScreen({ title: revoked ? 'Подпись соответствует документу' : 'Подпись верна',
-        description: revoked ? 'Содержимое соответствует подписи, но сертификат отозван. Сведения о времени отзыва ниже.' : 'Содержимое соответствует криптографической подписи.',
-        details: details + (stamps ? '\n\n' + stamps : '') + (states.some(state => state !== 'good' && state !== 'not-checked') ? '\n\nТекущий статус отзыва сам по себе не определяет действительность подписи в прошлом.'
-          : states.includes('not-checked') && !$('#check-revocation').checked ? '\n\nЧтобы узнать статус отзыва, отметьте «Проверить отзыв онлайн» и проверьте снова.' : ''),
-        warning: !trusted || states.some(state => state !== 'good' && state !== 'not-checked'), download: new Blob([content], { type: 'application/octet-stream' }), filename: (localName.replace(/\.(p7s|p7m|cms)$/i, '') || 'signed-document') + ( /\.[a-z0-9]{1,8}$/i.test(localName.replace(/\.(p7s|p7m|cms)$/i, '')) ? '' : '.bin') });
+      const { title, description, details, warning } = verificationText(data, { revocationRequested: $('#check-revocation').checked });
+      resultScreen({ title, description, details,
+        warning, download: new Blob([content], { type: 'application/octet-stream' }), filename: (localName.replace(/\.(p7s|p7m|cms)$/i, '') || 'signed-document') + ( /\.[a-z0-9]{1,8}$/i.test(localName.replace(/\.(p7s|p7m|cms)$/i, '')) ? '' : '.bin') });
       content.fill(0);
     });
     const signature = signatureFile.slice().buffer;
