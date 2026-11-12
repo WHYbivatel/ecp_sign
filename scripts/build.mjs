@@ -1,5 +1,6 @@
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { build } from 'esbuild';
 const source = new URL('../extension/', import.meta.url);
 const manifest = JSON.parse(await readFile(new URL('manifest.json', source), 'utf8'));
@@ -14,9 +15,12 @@ const testAnchors = process.env.TEGIN_TEST_ISSUANCE_ANCHORS ? JSON.stringify(JSO
   return value;
 })) : 'null';
 const testBuild = testIssuers !== 'null' || testAnchors !== 'null';
-const root = !testBuild ? new URL('../dist/', import.meta.url) : new URL(`file://${process.env.TEGIN_DIST?.replace(/\/?$/, '/')}`);
 if (testBuild && !process.env.TEGIN_DIST) throw new Error('Test trust settings require TEGIN_DIST outside dist/.');
-if (testBuild && new URL('chromium/', root).href.startsWith(new URL('../dist/', import.meta.url).href)) throw new Error('TEGIN_DIST must be outside dist/.');
+// A path, not a URL: drive letters, spaces, Cyrillic, '#' and '%' must survive.
+const root = !testBuild ? new URL('../dist/', import.meta.url) : pathToFileURL(resolve(process.env.TEGIN_DIST) + sep);
+const fromDist = relative(fileURLToPath(new URL('../dist/', import.meta.url)), fileURLToPath(root));
+const insideDist = !isAbsolute(fromDist) && fromDist !== '..' && !fromDist.startsWith('..' + sep);
+if (testBuild && insideDist) throw new Error('TEGIN_DIST must be outside dist/.');
 if (testIssuers !== 'null') manifest.name += ' (test revocation build)';
 if (testAnchors !== 'null') manifest.name += ' (test issuance build)';
 for (const target of ['chromium', 'firefox']) {
