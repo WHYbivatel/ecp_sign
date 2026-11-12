@@ -8,7 +8,7 @@
     "test": "node --test tests/*.test.js",
     "build": "node scripts/build.mjs",
     "test:e2e": "node tests/e2e.mjs && node tests/e2e-revocation.mjs && node tests/e2e-issuance.mjs",
-    "test:e2e:firefox": "node tests/e2e-issuance-firefox.mjs",
+    "test:e2e:firefox": "node tests/e2e-issuance-firefox.mjs && node tests/e2e-revocation-firefox.mjs",
     "package": "npm run build && node scripts/package.mjs",
     "test:tsp": "node tests/tsp-live.mjs",
     "test:revocation-live": "node tests/revocation-live.mjs"

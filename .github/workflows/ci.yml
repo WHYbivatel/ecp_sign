@@ -126,6 +126,9 @@ jobs:
         shell: bash
         run: |
           if [ "$TEGIN_BROWSER" = firefox ]; then node tests/e2e-issuance-firefox.mjs; else node tests/e2e-issuance.mjs; fi
+      - name: Revocation (OCSP, CRL fallback) in Firefox through a local test proxy
+        if: matrix.browser == 'firefox'
+        run: node tests/e2e-revocation-firefox.mjs
       - name: Screenshots on failure
         if: failure()
         uses: actions/upload-artifact@v4
