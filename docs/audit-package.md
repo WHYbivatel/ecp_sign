@@ -82,9 +82,8 @@ NCA_KALKAN_JARS=$(node scripts/fetch-kalkan.mjs .kalkan) node tests/kalkan-cross
   (проверено поиском 12.11.2026).
 - Kalkan 0.7.8 берётся из официального `ncalayer.zip` с закреплёнными SHA-256
   (`scripts/fetch-kalkan.mjs`).
-- CI: `.github/workflows/ci.yml`. Последний полный зелёный прогон —
-  [43203864358](https://github.com/WHYbivatel/ecp_sign/actions/runs/43203864358):
-  unit на Windows, macOS и Ubuntu, E2E Chrome, Edge, Chromium и Firefox, Kalkan.
+- CI: `.github/workflows/ci.yml`. Последний полный зелёный прогон — [43213439114](https://github.com/WHYbivatel/ecp_sign/actions/runs/43213439114) (`bae1400`):
+  unit на Windows, macOS и Ubuntu, E2E Chrome, Edge, Chromium и Firefox (включая проверку отзыва), Kalkan.
 
 ## Тестовые данные
 
@@ -112,10 +111,11 @@ NCA_KALKAN_JARS=$(node scripts/fetch-kalkan.mjs .kalkan) node tests/kalkan-cross
 | Проверка | Результат |
 |---|---|
 | Повтор проверки отзыва | unit 30/30; E2E Chromium 9/9; живые службы НУЦ: цепочка TSA `good` по OCSP, невыданные номера «не выдавался», CRL + delta RSA `good` |
-| Проверка отзыва в Firefox 160 | Новый `tests/e2e-revocation-firefox.mjs`, 4/4. Контроль: без разрешения на OCSP в манифесте тест падает |
+| Проверка отзыва в Firefox 160 | Новый `tests/e2e-revocation-firefox.mjs`, 4/4 на Windows x64, macOS ARM64 и Linux x64. Контроль: без разрешения на OCSP в манифесте тест падает |
 | Новый код после этапа 3 (выпуск ключа, хранение, Common Utils, PAdES) | Просмотрен. Нарушений границ доверия не найдено, одно замечание о сроке хранения (ниже) |
 | Фаззинг PDF | 2 × 3000 входов: отказы только своими кодами `PDF_*`, все принятые подписаны с самопроверкой, максимум 51 мс на разбор |
 | Воспроизводимость сборки | `dist/` совпадает побайтно |
+| Нестабильный E2E «закрытие вкладки» | Дефект расширения: окно не закрывалось, если его запрос завершался по сроку или после закрытия вкладки. Исправлено в `a0afa5c` |
 
 ## Открытые замечания и вопросы
 

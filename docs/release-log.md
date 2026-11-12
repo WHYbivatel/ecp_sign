@@ -8,7 +8,7 @@
 
 Коммиты в `codex/nca-key-issuance`. Ветка отправлена в `WHYbivatel/ecp_sign` по SSH владельца
 12.11.2026 (без слияния в `main`, без публикации). На сайте по-прежнему `dd40b5e`. CI на
-`e79613f`: все 12 задач зелёные ([прогон 43203864358](https://github.com/WHYbivatel/ecp_sign/actions/runs/43203864358)). Проверка на `f748a81`: `npm test` 120/120, `tests/e2e.mjs` 38/38,
+`bae1400`: все 12 задач зелёные ([прогон 43213439114](https://github.com/WHYbivatel/ecp_sign/actions/runs/43213439114)); раньше — `e79613f` ([43203864358](https://github.com/WHYbivatel/ecp_sign/actions/runs/43203864358)). Проверка на `f748a81`: `npm test` 120/120, `tests/e2e.mjs` 38/38,
 `tests/e2e-issuance.mjs` и `tests/e2e-revocation.mjs` — код выхода 0, Firefox 160 5/5 (Linux x64).
 
 | Коммит | Изменение | Проверка |
