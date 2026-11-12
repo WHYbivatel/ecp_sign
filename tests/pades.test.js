@@ -11,6 +11,7 @@ import { openContainer } from '../extension/crypto/signer.js';
 import { signPades, inspectPdf, PADES_SUBFILTER } from '../extension/crypto/pades.js';
 import { verifyCms } from '../extension/crypto/cms-verify.js';
 import { forge } from '../extension/crypto/encoding.js';
+import { appendInfoRevision, hybridPdf } from './helpers/pdf-structures.js';
 
 const fixture = rsaFixture({ purpose: 'emailProtection' });
 const signer = await openContainer(fixture.container, PASSWORD);
@@ -250,4 +251,68 @@ test('PAdES is not offered for GOST keys until a profile is independently valida
   const gost = gostFixture('256', { eku: ['1.3.6.1.5.5.7.3.4'] });
   const gostSigner = await openContainer(gost.container, PASSWORD);
   await refusal(signPades(gostSigner, await syntheticPdf()), 'PDF_ALGORITHM');
+});
+
+async function verifyAll(pdf) {
+  for (const { covered, cms } of allParts(pdf)) assert.equal((await verifyCms(new Uint8Array(cms), { detached: new Uint8Array(covered) })).signers.length, 1);
+}
+
+test('PAdES signs after an unsigned incremental revision, before and after an earlier signature', async () => {
+  const edited = await appendInfoRevision(await syntheticPdf());
+  assert.deepEqual(await inspectPdf(edited), { pages: 2, signatures: 0 });
+  const signed = await signPades(signer, edited);
+  assert.deepEqual(signed.subarray(0, edited.length), edited);
+  assert.equal((await PDFDocument.load(signed, { updateMetadata: false })).getProducer(), 'Synthetic editor');
+  await verifyAll(signed);
+
+  // An unsigned revision after a signature: the earlier signature still covers only its own revision.
+  const afterSignature = await appendInfoRevision(signed, 'Synthetic editor 2');
+  const second = await signPades(signer, afterSignature);
+  assert.deepEqual(second.subarray(0, afterSignature.length), afterSignature);
+  const [first, own] = allParts(second);
+  assert.equal(first.range[2] + first.range[3], signed.length);
+  assert.equal(own.range[2] + own.range[3], second.length);
+  await verifyAll(second);
+  assert.deepEqual(await inspectPdf(second), { pages: 2, signatures: 2 });
+});
+
+test('PAdES follows a hybrid-reference file: table, /XRefStm with an object stream, and /Prev after signing', async () => {
+  const hybrid = hybridPdf();
+  assert.deepEqual(await inspectPdf(hybrid), { pages: 1, signatures: 0 });
+  const signed = await signPades(signer, hybrid);
+  assert.deepEqual(signed.subarray(0, hybrid.length), hybrid);
+  const tail = Buffer.from(signed.subarray(hybrid.length)).toString('latin1');
+  assert.match(tail, /\nxref\n/, 'the update keeps the table kind of the original');
+  assert.match(tail, new RegExp(`/Prev ${/startxref\s+(\d+)\s+%%EOF\s*$/.exec(Buffer.from(hybrid).toString('latin1'))[1]}\\b`));
+  const doc = await PDFDocument.load(signed);
+  assert.equal(doc.getPage(0).node.Resources().lookup(PDFName.of('Font')).lookup(PDFName.of('F1')).lookup(PDFName.of('BaseFont')), PDFName.of('Helvetica'));
+  await verifyAll(signed);
+  await verifyAll(await signPades(signer, signed));
+
+  const text = Buffer.from(hybrid).toString('latin1');
+  const pointer = /\/XRefStm (\d+)/.exec(text);
+  const wrong = Buffer.from(text.replace(pointer[0], `/XRefStm ${String(Number(pointer[1]) + 1).padStart(pointer[1].length, '0')}`.slice(0, pointer[0].length)), 'latin1');
+  await refusal(inspectPdf(new Uint8Array(wrong)), 'PDF_BROKEN');
+});
+
+test('PAdES refuses when an earlier signature forbids every later change (/P 1), and signs when it allows signing', async () => {
+  const lockedPdf = (lock, transform) => syntheticPdf(doc => {
+    const reference = transform && doc.context.obj({ Type: 'SigRef', TransformMethod: 'FieldMDP', TransformParams: doc.context.obj(transform) });
+    const sig = doc.context.register(doc.context.obj({ Type: 'Sig', Filter: 'Adobe.PPKLite', SubFilter: PADES_SUBFILTER, ByteRange: [0, 0, 0, 0], ...(reference ? { Reference: [reference] } : {}) }));
+    const field = doc.context.register(doc.context.obj({ FT: 'Sig', T: PDFString.of('Locked'), V: sig, Rect: [0, 0, 0, 0], ...(lock ? { Lock: doc.context.obj(lock) } : {}) }));
+    doc.catalog.set(PDFName.of('AcroForm'), doc.context.obj({ Fields: [field], SigFlags: 3 }));
+  });
+  const fields = { Action: 'Include', Fields: [PDFString.of('customer')] };
+  for (const [label, lock, transform] of [['/Lock /P 1', { Type: 'SigFieldLock', ...fields, P: 1 }], ['FieldMDP /P 1', null, { Type: 'TransformParams', ...fields, P: 1 }],
+    ['/Lock with an unknown /P', { Type: 'SigFieldLock', Action: 'All', P: 7 }]]) {
+    const pdf = await lockedPdf(lock, transform);
+    await refusal(inspectPdf(pdf), 'PDF_LOCKED').catch(error => { throw new Error(`${label}: ${error.message}`); });
+    await refusal(signPades(signer, pdf), 'PDF_LOCKED');
+  }
+  for (const [lock, transform] of [[{ Type: 'SigFieldLock', ...fields }, { Type: 'TransformParams', ...fields }], [{ Type: 'SigFieldLock', ...fields, P: 2 }, { Type: 'TransformParams', ...fields, P: 2 }], [{ Type: 'SigFieldLock', Action: 'All', P: 3 }, null]]) {
+    const pdf = await lockedPdf(lock, transform);
+    assert.deepEqual(await inspectPdf(pdf), { pages: 2, signatures: 1 });
+    const signed = await signPades(signer, pdf);
+    assert.deepEqual(signed.subarray(0, pdf.length), pdf);
+  }
 });

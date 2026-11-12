@@ -178,6 +178,36 @@ jobs:
       # Software PKCS#11 token as a stand-in: protocol, PIN, cancel, removal; no physical device.
       - run: node tests/token-softhsm.mjs
 
+  pades-independent:
+    name: PAdES against EU DSS and pyHanko · ubuntu
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - run: pip install pyHanko==0.38.0 pyhanko-certvalidator==0.33.0 asn1crypto==1.5.1
+      - name: EU DSS 6.5.1 validator (tests/interop/dss)
+        run: |
+          mvn -B -q -f tests/interop/dss/pom.xml dependency:copy-dependencies -DoutputDirectory="$RUNNER_TEMP/dss/lib"
+          javac -cp "$RUNNER_TEMP/dss/lib/*" -d "$RUNNER_TEMP/dss/classes" tests/interop/dss/Validate.java
+          echo "DSS_VALIDATOR=$RUNNER_TEMP/dss" >> "$GITHUB_ENV"
+      # RSA 2048/3072/4096, second signatures in both directions, tampering, hybrid references,
+      # unsigned revisions, FieldMDP /Lock with and without /P.
+      - run: node tests/pades-crosscheck.mjs
+
   xml-official:
     name: XML against official NCALayer code · ubuntu
     needs: unit

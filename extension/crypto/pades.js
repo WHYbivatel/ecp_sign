@@ -12,6 +12,7 @@ const MESSAGES = {
   notPdf: 'Файл не является PDF-документом.',
   encrypted: 'PDF зашифрован или защищён паролем. Такой документ не подписывается: снимите защиту в программе, где он создан, и выберите файл снова.',
   certified: 'PDF заверен сертификационной подписью (DocMDP), которая ограничивает изменения. Добавление подписи в такой документ пока не поддерживается: подпись не создана.',
+  locked: 'Одна из подписей в PDF запрещает любые изменения документа после неё. Новая подпись сделала бы её недействительной, поэтому подпись не создана.',
   field: 'PDF содержит пустое поле для подписи. Подписание в существующие поля пока не поддерживается: подпись не создана.',
   xfa: 'PDF с формами XFA не поддерживается: подпись не создана.',
   empty: 'В PDF нет страниц.',
@@ -102,6 +103,26 @@ function hasEmptySignatureField(doc) {
   return false;
 }
 
+// A signed field can set the permissions that apply after it: /P in its /Lock and in the FieldMDP or DocMDP
+// transform parameters of its signature (ISO 32000-2 §12.7.5.5, §12.8.2.2). Only 2 and 3 admit a further signature.
+function forbidsChanges(doc) {
+  const admits = dict => {
+    const value = dict instanceof PDFDict ? entry(doc, dict, 'P') : undefined;
+    return value === undefined || (value instanceof PDFNumber && [2, 3].includes(value.asNumber()));
+  };
+  for (const [, object] of doc.context.enumerateIndirectObjects()) {
+    const dict = dictOf(object);
+    if (!dict) continue;
+    if (dict.has(name('Lock')) && filled(doc, dict) && !admits(entry(doc, dict, 'Lock'))) return true;
+    const references = isSignatureDict(doc, dict) ? entry(doc, dict, 'Reference') : undefined;
+    if (references instanceof PDFArray && references.asArray().some(reference => {
+      const value = resolve(doc, reference);
+      return value instanceof PDFDict && !admits(entry(doc, value, 'TransformParams'));
+    })) return true;
+  }
+  return false;
+}
+
 function check(doc, data) {
   try {
     crossReferences(doc, data);
@@ -110,6 +131,7 @@ function check(doc, data) {
     const form = resolve(doc, doc.catalog.get(name('AcroForm')));
     if (form instanceof PDFDict && form.has(name('XFA'))) throw refuse('xfa');
     if (hasEmptySignatureField(doc)) throw refuse('field');
+    if (forbidsChanges(doc)) throw refuse('locked');
     return { pages: doc.getPageCount(), signatures: signatureDicts(doc).length };
   } catch (error) { throw error.pdf ? error : refuse('broken'); }
 }

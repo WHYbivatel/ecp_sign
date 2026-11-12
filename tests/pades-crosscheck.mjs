@@ -12,6 +12,7 @@ import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { rsaFixture, PASSWORD } from './helpers/fixtures.js';
 import { openContainer } from '../extension/crypto/signer.js';
 import { signPades, inspectPdf } from '../extension/crypto/pades.js';
+import { appendInfoRevision, hybridPdf } from './helpers/pdf-structures.js';
 
 const dss = process.env.DSS_VALIDATOR;
 if (!dss) throw new Error('Set DSS_VALIDATOR to the EU DSS validator directory.');
@@ -19,7 +20,7 @@ const folder = mkdtempSync(join(tmpdir(), 'tegin-pades-crosscheck-'));
 const file = name => join(folder, name);
 const python = resolve('tests/independent_pades.py');
 const runDss = (pdf, cert) => JSON.parse(execFileSync('java', ['-cp', `${dss}/classes:${dss}/lib/*`, 'Validate', pdf, cert], { encoding: 'utf8' })).signatures;
-const runHanko = (pdf, cert) => JSON.parse(execFileSync('python3', [python, 'validate', pdf, cert], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).signatures;
+const runHanko = (pdf, cert, mode = 'strict') => JSON.parse(execFileSync('python3', [python, 'validate', pdf, cert, mode], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).signatures;
 const hanko = (...args) => execFileSync('python3', [python, ...args], { stdio: 'pipe' });
 
 async function document(text, { objectStreams = false, field = false } = {}) {
@@ -30,9 +31,9 @@ async function document(text, { objectStreams = false, field = false } = {}) {
   if (field) { const input = doc.getForm().createTextField('customer'); input.setText('Synthetic'); input.addToPage(doc.getPage(0), { x: 50, y: 700, width: 200, height: 20 }); }
   return doc.save({ useObjectStreams: objectStreams });
 }
-function expectValid(name, cert) {
+function expectValid(name, cert, mode) {
   const [dssResult, ...extraDss] = runDss(file(name), cert);
-  const [hankoResult, ...extraHanko] = runHanko(file(name), cert);
+  const [hankoResult, ...extraHanko] = runHanko(file(name), cert, mode);
   assert.equal(extraDss.length + extraHanko.length, 0);
   assert.equal(dssResult.indication, 'TOTAL_PASSED', JSON.stringify(dssResult));
   assert.equal(dssResult.format, 'PAdES-BASELINE-B');
@@ -164,5 +165,40 @@ try {
     assert.ok(dssTampered.every(item => item.indication === 'TOTAL_FAILED' && !item.intact), JSON.stringify(dssTampered));
     assert.ok(hankoTampered.every(item => !item.intact && !item.bottomLine));
     console.log('PASS: byte changed inside the first revision of a two-signature PDF: both signatures fail in DSS and pyHanko');
+
+    // Structures pdf-lib does not write: hybrid references and an unsigned revision before signing.
+    // pyHanko's strict reader refuses every signature in a hybrid-reference file by policy; it is read leniently here.
+    writeFileSync(file('hybrid.pdf'), await signPades(signer, hybridPdf()));
+    assert.throws(() => execFileSync('python3', [python, 'validate', file('hybrid.pdf'), cert], { encoding: 'utf8', stdio: 'pipe' }), error => /do not permit validation of signatures in hybrid-reference files/.test(error.stderr));
+    let check = expectValid('hybrid.pdf', cert, 'lenient');
+    console.log(`PASS: hybrid-reference PDF (table + /XRefStm, font in an object stream): DSS ${check.dss.indication} ${check.dss.format}; pyHanko lenient ${check.hanko.coverage}/${check.hanko.modificationLevel}; pyHanko strict refuses hybrid files by policy`);
+    writeFileSync(file('edited.pdf'), await signPades(signer, await appendInfoRevision(await document('Contract 100 KZT'))));
+    check = expectValid('edited.pdf', cert);
+    console.log(`PASS: unsigned incremental revision before signing: DSS ${check.dss.indication}; pyHanko ${check.hanko.coverage}/${check.hanko.modificationLevel}`);
+
+    // A pyHanko signature whose field /Lock covers a text field: /P 1 forbids any later change, 2 and absent allow signing.
+    writeFileSync(file('form.pdf'), await document('Contract 100 KZT', { field: true }));
+    for (const permission of ['-', '2', '1']) {
+      const locked = file(`locked-${permission}.pdf`);
+      hanko('sign-locked', file('form.pdf'), locked, file('key.pem'), cert, 'customer', permission);
+      if (permission === '1') {
+        await assert.rejects(signPades(signer, new Uint8Array(readFileSync(locked))), error => error.code === 'PDF_LOCKED');
+        console.log('PASS: earlier signature with /Lock /P 1 (no changes allowed): Tegin refuses, the document is not touched');
+        continue;
+      }
+      writeFileSync(file(`locked-${permission}-tegin.pdf`), await signPades(signer, new Uint8Array(readFileSync(locked))));
+      const lockedResult = expectTwo(`locked-${permission}-tegin.pdf`, cert, { foreignSecond: true });
+      console.log(`PASS: Tegin signs after a pyHanko signature with a FieldMDP /Lock${permission === '-' ? '' : ` /P ${permission}`}: first ${lockedResult.first}; second ${lockedResult.second}`);
+    }
+    // Control: changing the locked field after that signature is caught by both validators.
+    hanko('fill', file('locked---tegin.pdf'), file('locked-filled.pdf'), 'customer', 'Changed');
+    const lockedHanko = runHanko(file('locked-filled.pdf'), cert), lockedDss = runDss(file('locked-filled.pdf'), cert);
+    // The pyHanko signature locked the field; Tegin's signature locks nothing, so for it the change is form filling.
+    assert.equal(lockedHanko[0].fieldName, 'Locked');
+    assert.ok(lockedHanko[0].intact && !lockedHanko[0].docmdpOk && lockedHanko[0].bottomLine === false, JSON.stringify(lockedHanko[0]));
+    assert.equal(lockedHanko[1].modificationLevel, 'FORM_FILLING', JSON.stringify(lockedHanko[1]));
+    // DSS 6.5.1 classifies the change as form filling and does not apply the /Lock; recorded, not relied on.
+    assert.ok(lockedDss[0].objectModifications && lockedDss[0].signatureOrFormFillChanges > 0, JSON.stringify(lockedDss[0]));
+    console.log(`PASS: locked field changed after both signatures: pyHanko marks the locking signature (${lockedHanko[0].modificationLevel}, bottom line false) and sees form filling after Tegin's; DSS does not apply /Lock: ${lockedDss.map(item => `${item.indication}, form-fill changes ${item.signatureOrFormFillChanges}`).join(' / ')}`);
   }
 } finally { rmSync(folder, { recursive: true, force: true }); }

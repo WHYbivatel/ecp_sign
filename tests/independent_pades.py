@@ -1,9 +1,12 @@
 """Independent PAdES checks with pyHanko (tested with 0.38.0). Synthetic files only.
 
-  validate <file.pdf> <trusted-cert.pem>   -> JSON with integrity, coverage, modifications, AdES basic result
+  validate <file.pdf> <trusted-cert.pem> [lenient] -> JSON with integrity, coverage, modifications, AdES basic result;
+           strict reading by default (refuses hybrid-reference files), 'lenient' reads them
   modify   <signed.pdf> <out.pdf>          -> incremental update that draws over page 1 after signing
   encrypt  <file.pdf> <out.pdf>            -> RC4/AES encrypted copy (user password)
   sign     <file.pdf> <out.pdf> <key.pem> <cert.pem> -> PAdES signature made by pyHanko itself
+  sign-locked <file.pdf> <out.pdf> <key.pem> <cert.pem> <field> <1|2|3|-> -> same, field /Lock over <field>, optional /P
+  fill     <file.pdf> <out.pdf> <field> <value>  -> incremental update that changes a text field value
 """
 import asyncio
 import json
@@ -15,7 +18,7 @@ from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
 from pyhanko.pdf_utils.reader import PdfFileReader
 from pyhanko.pdf_utils.writer import copy_into_new_writer
 from pyhanko.sign import signers
-from pyhanko.sign.fields import SigSeedSubFilter
+from pyhanko.sign.fields import FieldMDPAction, FieldMDPSpec, MDPPerm, SigFieldSpec, SigSeedSubFilter, append_signature_field
 from pyhanko.sign.validation import validate_pdf_signature
 from pyhanko.sign.validation.ades import ades_basic_validation
 from pyhanko.sign.validation.policy_decl import SignatureValidationSpec
@@ -33,7 +36,7 @@ def certificate(path):
     return x509.Certificate.load(data)
 
 
-def validate(path, cert_path):
+def validate(path, cert_path, mode='strict'):
     root = certificate(cert_path)
     no_revocation = RevocationCheckingPolicy(RevocationCheckingRule.NO_CHECK, RevocationCheckingRule.NO_CHECK)
     context = ValidationContext(trust_roots=[root], allow_fetching=False, revocation_mode='soft-fail')
@@ -41,7 +44,7 @@ def validate(path, cert_path):
         trust_manager=SimpleTrustManager.build(trust_roots=[CertTrustAnchor(root)]),
         revinfo_policy=CertRevTrustPolicy(no_revocation)))
     with open(path, 'rb') as stream:
-        reader = PdfFileReader(stream, strict=True)
+        reader = PdfFileReader(stream, strict=mode != 'lenient')
         result = {'validator': 'pyHanko 0.38.0', 'signatures': []}
         for embedded in reader.embedded_signatures:
             status = validate_pdf_signature(embedded, context)
@@ -87,6 +90,33 @@ def sign(path, out, key, cert):
             signers.sign_pdf(writer, signers.PdfSignatureMetadata(field_name='Other', subfilter=SigSeedSubFilter.PADES), signer=signer, output=target)
 
 
+def sign_locked(path, out, key, cert, field, permission):
+    """Signature field whose /Lock (FieldMDP) covers <field>; <permission> 1-3 adds /P, '-' leaves it out."""
+    signer = signers.SimpleSigner.load(key, cert)
+    lock = FieldMDPSpec(FieldMDPAction.INCLUDE, fields=[field])
+    spec = SigFieldSpec('Locked', field_mdp_spec=lock, doc_mdp_update_value=None if permission == '-' else MDPPerm(int(permission)))
+    with open(path, 'rb') as stream:
+        writer = IncrementalPdfFileWriter(stream, strict=True)
+        append_signature_field(writer, spec)
+        with open(out, 'wb') as target:
+            signers.sign_pdf(writer, signers.PdfSignatureMetadata(field_name='Locked', subfilter=SigSeedSubFilter.PADES), signer=signer, output=target)
+
+
+def fill(path, out, field, value):
+    """Incremental update that changes the value of a text field."""
+    with open(path, 'rb') as stream:
+        writer = IncrementalPdfFileWriter(stream, strict=True)
+        fields = writer.root['/AcroForm']['/Fields']
+        for index in range(len(fields)):
+            reference = fields.raw_get(index)
+            node = reference.get_object()
+            if node.get('/T') == field:
+                node['/V'] = generic.TextStringObject(value)
+                writer.mark_update(reference)
+        with open(out, 'wb') as target:
+            writer.write(target)
+
+
 if __name__ == '__main__':
     command, *args = sys.argv[1:]
-    {'validate': validate, 'modify': modify, 'encrypt': encrypt, 'sign': sign}[command](*args)
+    {'validate': validate, 'modify': modify, 'encrypt': encrypt, 'sign': sign, 'sign-locked': sign_locked, 'fill': fill}[command](*args)
