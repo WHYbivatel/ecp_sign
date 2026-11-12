@@ -1,0 +1,125 @@
+name: CI
+
+# Synthetic keys and local replicas only. Network checks of TSA/OCSP/CRL and real portals run
+# separately (tests/tsp-live.mjs, tests/revocation-live.mjs, manual portal scenarios).
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: unit · ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: OpenSSL 3 first in PATH
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"; fi
+          if [ "$RUNNER_OS" = Windows ] && [ -d "/c/Program Files/OpenSSL/bin" ]; then echo "C:\\Program Files\\OpenSSL\\bin" >> "$GITHUB_PATH"; fi
+      - name: Environment
+        shell: bash
+        run: |
+          node -p '`node ${process.version} ${process.platform} ${process.arch}`'
+          openssl version
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - name: Release metadata
+        run: node website/scripts/check-releases.mjs
+
+  issuance-browsers:
+    name: issuance E2E · ${{ matrix.browser }} · ${{ matrix.os }}
+    needs: unit
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, browser: chrome }
+          - { os: windows-latest, browser: msedge }
+          - { os: macos-latest, browser: chrome }
+          - { os: ubuntu-latest, browser: chrome }
+          - { os: ubuntu-latest, browser: chromium }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      TEGIN_BROWSER: ${{ matrix.browser }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: OpenSSL 3 first in PATH
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"; fi
+          if [ "$RUNNER_OS" = Windows ] && [ -d "/c/Program Files/OpenSSL/bin" ]; then echo "C:\\Program Files\\OpenSSL\\bin" >> "$GITHUB_PATH"; fi
+      - run: npm ci
+      - name: Browser
+        shell: bash
+        run: |
+          if [ "$TEGIN_BROWSER" = chromium ]; then npx playwright install --with-deps chromium; fi
+          if [ "$TEGIN_BROWSER" = msedge ]; then npx playwright install msedge || true; fi
+          if [ "$TEGIN_BROWSER" = chrome ]; then npx playwright install chrome || true; fi
+      - name: Kalkan jars (official NCALayer archive, pinned SHA-256)
+        id: kalkan
+        uses: actions/cache@v4
+        with:
+          path: .kalkan
+          key: kalkan-0.7.8-5588f9ae-72c273d3
+      - name: Independent verifier
+        shell: bash
+        run: echo "NCA_KALKAN_JARS=$(node scripts/fetch-kalkan.mjs .kalkan)" >> "$GITHUB_ENV"
+      - name: Issuance, installation, reopen .p12, signature checked by Kalkan
+        run: node tests/e2e-issuance.mjs
+      - name: Screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issuance-${{ matrix.browser }}-${{ matrix.os }}
+          path: artifacts/
+          if-no-files-found: ignore
+
+  full-e2e-linux:
+    name: full E2E · chromium · ubuntu
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - name: Screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-e2e
+          path: artifacts/
+          if-no-files-found: ignore
