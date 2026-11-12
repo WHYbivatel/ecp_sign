@@ -18,6 +18,8 @@ import { openContainer } from '../extension/crypto/signer.js';
 import { SignedXml } from 'xml-crypto';
 import { DOMParser } from '@xmldom/xmldom';
 import { PDFDocument } from 'pdf-lib';
+import { catalog } from '../extension/modules/catalog.js';
+import { modules as moduleRegistry } from '../extension/modules/registry.js';
 
 const folder = mkdtempSync(join(tmpdir(), 'ncabrowser-e2e-'));
 const extension = resolve('dist/chromium');
@@ -797,7 +799,7 @@ try {
   await manager.goto(`chrome-extension://${extensionId}/index.html?workspace=1`); await manager.locator('#modules').click();
   await manager.locator('[data-module="goszakup"]').waitFor();
   assert.equal(await manager.locator('[data-module]').count(), 8);
-  await manager.locator('#filter').selectOption('all'); assert.equal(await manager.locator('.module').count(), 47);
+  await manager.locator('#filter').selectOption('all'); assert.equal(await manager.locator('.module').count(), moduleRegistry.length + catalog.filter(entry => !moduleRegistry.some(module => module.bundle === entry.symname)).length);
   await manager.locator('#search').fill('ЭСФ'); assert.ok(await manager.locator('[data-unavailable]').count() >= 1);
   await manager.locator('#search').fill(''); await manager.locator('#filter').selectOption('available');
   const moduleCard = manager.locator('[data-module="goszakup"]');
