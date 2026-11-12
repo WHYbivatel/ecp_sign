@@ -132,6 +132,9 @@ jobs:
       - name: Revocation (OCSP, CRL fallback) in Firefox through a local test proxy
         if: matrix.browser == 'firefox'
         run: node tests/e2e-revocation-firefox.mjs
+      - name: Password change tool in Firefox, copies checked by Kalkan
+        if: matrix.browser == 'firefox'
+        run: node tests/e2e-password-firefox.mjs
       - name: Screenshots on failure
         if: failure()
         uses: actions/upload-artifact@v4
