@@ -924,7 +924,36 @@ try {
   }, frameRequest('doubled'));
   await framePage.waitForFunction(() => window.doubled.length === 1);
   assert.deepEqual(await framePage.evaluate(() => window.doubled), [{ closed: 1008 }]);
-  await sw.evaluate(() => new Promise(resolve => { const check = async () => Object.keys(await chrome.storage.session.get(null)).some(key => key.startsWith('pending:')) ? setTimeout(check, 100) : resolve(); check(); }));
+  const noPending = () => sw.evaluate(() => new Promise(resolve => { const check = async () => Object.keys(await chrome.storage.session.get(null)).some(key => key.startsWith('pending:')) ? setTimeout(check, 100) : resolve(); check(); }));
+  await noPending();
+  // A request that expired without its alarm firing is ended by the next request, and its window closes.
+  nextPage = context.waitForEvent('page');
+  await framePage.evaluate(request => {
+    window.stale = [];
+    const socket = new WebSocket('wss://127.0.0.1:13579/');
+    socket.onopen = () => socket.send(JSON.stringify(request));
+    socket.onmessage = event => window.stale.push(JSON.parse(event.data));
+  }, frameRequest('stale'));
+  const stalePopup = await nextPage;
+  const staleClosed = stalePopup.waitForEvent('close');
+  await sw.evaluate(() => new Promise(resolve => {
+    const expire = async () => {
+      const found = Object.entries(await chrome.storage.session.get(null)).find(([key, record]) => key.startsWith('pending:') && record.windowId);
+      if (!found) return setTimeout(expire, 100);
+      await chrome.alarms.clear(found[0]);
+      await chrome.storage.session.set({ [found[0]]: { ...found[1], expires: Date.now() - 1 } });
+      resolve();
+    };
+    expire();
+  }));
+  nextPage = context.waitForEvent('page');
+  await openSocket(child, frameRequest('after stale'));
+  const freshPopup = await nextPage;
+  await staleClosed;
+  await framePage.waitForFunction(() => window.stale.length === 1);
+  assert.deepEqual(await framePage.evaluate(() => window.stale[0]), { status: true, body: {} });
+  await freshPopup.close();
+  await noPending();
   await openSocket(child, frameRequest('closing tab'));
   const orphanId = await sw.evaluate(() => new Promise(resolve => {
     const check = async () => { const found = Object.entries(await chrome.storage.session.get(null)).find(([key, record]) => key.startsWith('pending:') && record.windowId && JSON.stringify(record.request).includes('closing tab')); found ? resolve(found[1].id) : setTimeout(check, 100); };
@@ -935,8 +964,15 @@ try {
   assert.ok(orphan, 'approval window for the closing tab request');
   const orphanClosed = orphan.waitForEvent('close');
   await framePage.close();
-  await orphanClosed;
-  console.log('PASS: frame binding: the child response reaches only the child, one pending request per frame, timeout returns a basics cancel and closes the window, a second send on one socket closes it, closing the tab closes the approval');
+  try { await orphanClosed; } catch (error) {
+    console.error('tab-close diagnostic', JSON.stringify(await sw.evaluate(async id => {
+      const pendingKeys = Object.keys(await chrome.storage.session.get(null)).filter(key => key.startsWith('pending:'));
+      const windows = (await chrome.windows.getAll({ populate: true })).map(item => ({ id: item.id, type: item.type, tabs: item.tabs.map(tab => tab.url?.split('#')[1] === id ? 'orphan' : 'other') }));
+      return { pendingKeys, windows };
+    }, orphanId)));
+    throw error;
+  }
+  console.log('PASS: frame binding: the child response reaches only the child, one pending request per frame, timeout returns a basics cancel and closes the window, a second send on one socket closes it, an expired request ended by the next one closes its window, closing the tab closes the approval');
 
   // The eGov origin is intercepted by the local test route: no real portal
   // session, account or document is involved.

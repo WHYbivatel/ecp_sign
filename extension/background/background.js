@@ -50,6 +50,11 @@ async function refuse(tabId, request, response) {
   return { response };
 }
 const abandon = (record, reason) => finish(record, errorResponse(record.request, reason, true), reason);
+// Ends the request and closes its confirmation window, which can no longer act on it.
+async function closeRequest(record, reason) {
+  await abandon(record, reason);
+  if (record.windowId) await api.windows.remove(record.windowId).catch(() => {});
+}
 async function pending(id) { return (await api.storage.session.get(PREFIX + id))[PREFIX + id]; }
 async function alive(record) {
   if (Date.now() > record.expires) return false;
@@ -95,7 +100,7 @@ async function handle(message, sender) {
       }
     }
     const records = Object.entries(await api.storage.session.get(null)).filter(([key]) => key.startsWith(PREFIX));
-    for (const [, record] of records) if (Date.now() > record.expires) await abandon(record, 'Время подтверждения истекло.');
+    for (const [, record] of records) if (Date.now() > record.expires) await closeRequest(record, 'Время подтверждения истекло.');
     const active = records.map(([, record]) => record).filter(record => Date.now() <= record.expires);
     if (active.length >= 4 || active.some(record => record.tabId === sender.tab.id && record.frameId === sender.frameId)) {
       await diagnose(sender.tab.id, message.request, 'refused', 'BUSY', 'Уже есть ожидающий запрос.');
@@ -119,8 +124,7 @@ async function handle(message, sender) {
     const records = await api.storage.session.get(null);
     for (const [key, record] of Object.entries(records)) {
       if (key.startsWith(PREFIX) && record.tabId === sender.tab.id && record.frameId === sender.frameId && record.instance === message.instance && record.token === message.token) {
-        await abandon(record, 'Операция отменена.');
-        if (record.windowId) await api.windows.remove(record.windowId).catch(() => {});
+        await closeRequest(record, 'Операция отменена.');
       }
     }
     return { ok: true };
@@ -174,16 +178,14 @@ api.alarms.onAlarm.addListener(alarm => {
   queue = queue.then(async () => {
     const record = await pending(alarm.name.slice(PREFIX.length));
     if (!record) return;
-    await abandon(record, 'Время подтверждения истекло.');
-    if (record.windowId) await api.windows.remove(record.windowId).catch(() => {});
+    await closeRequest(record, 'Время подтверждения истекло.');
   }).catch(() => {});
 });
 api.tabs.onRemoved.addListener(tabId => {
   queue = queue.then(async () => {
     for (const [key, record] of Object.entries(await api.storage.session.get(null))) {
       if (!key.startsWith(PREFIX) || record.tabId !== tabId) continue;
-      await abandon(record, 'Страница закрыта.');
-      if (record.windowId) await api.windows.remove(record.windowId).catch(() => {});
+      await closeRequest(record, 'Страница закрыта.');
     }
     await api.storage.session.remove(DIAGNOSTIC_PREFIX + tabId);
   }).catch(() => {});
