@@ -8,6 +8,7 @@
 
 Коммиты в `codex/nca-key-issuance`. Ветка отправлена в `WHYbivatel/ecp_sign` по SSH владельца
 12.11.2026 (без слияния в `main`, без публикации). На сайте по-прежнему `dd40b5e`. CI на
+`1bc8bbb`: все 16 задач зелёные ([прогон 43274778014](https://github.com/WHYbivatel/ecp_sign/actions/runs/43274778014)); на
 `2605938`: все 12 задач зелёные ([прогон 43215232077](https://github.com/WHYbivatel/ecp_sign/actions/runs/43215232077)); раньше — `bae1400` ([43213439114](https://github.com/WHYbivatel/ecp_sign/actions/runs/43213439114)), `e79613f` ([43203864358](https://github.com/WHYbivatel/ecp_sign/actions/runs/43203864358)). Проверка на `f748a81`: `npm test` 120/120, `tests/e2e.mjs` 38/38,
 `tests/e2e-issuance.mjs` и `tests/e2e-revocation.mjs` — код выхода 0, Firefox 160 5/5 (Linux x64).
 
@@ -50,6 +51,8 @@
 | `103e68f` | «Ключи заявок»: «Скачать резервную копию» для незавершённой заявки, тот же файл, что после заявки. Видно пользователю | unit, E2E Chromium; Firefox — в `fa137c5` |
 | `11059bc` | PAdES: отказ `PDF_LOCKED`, если прежняя подпись запрещает любые изменения (`/P 1` в `/Lock` или FieldMDP); раньше Tegin подписывал и ломал прежнюю подпись. Тесты неподписанной ревизии и гибридных ссылок; EU DSS и pyHanko в CI | unit 177/177; `pades-crosscheck.mjs` 22 проверки. CI 43269722001: `pades-independent` зелёный |
 | `5094c0f`, `fa137c5` | Полный E2E берёт число модулей из каталога; Firefox E2E: отказ похожему домену, выгрузка копии из «Ключей заявок», удаление, установка из восстановленной копии | CI 43269722001: Firefox на Windows, macOS, Linux зелёный; упал Chrome на Windows — гонка в «Ключах заявок» (сообщение об удалении до перерисовки списка), исправлено следующим коммитом |
+| `bec759b` | «Ключи заявок»: сообщение об удалении после перерисовки списка; еженедельная проверка бандлов из каталога | CI [43270753268](https://github.com/WHYbivatel/ecp_sign/actions/runs/43270753268): 16/16 зелёные |
+| `1bc8bbb` | CI: `cades-lt-crosscheck`, `kalkan-pkcs12`, `kalkan-issuance`; PDF из браузера проверяют DSS и pyHanko в `full-e2e-linux` (обязательно, `TEGIN_REQUIRE_DSS`). Сертифицирующая подпись pyHanko (DocMDP `/P 1`–`3`): DSS и pyHanko видят уровень, Tegin отказывает с `PDF_CERTIFIED`, вход не меняется. Firefox E2E: отказ фрейму портала, перезапуск профиля (записи в `storage.local` сохраняются). Архивы `.zip` воспроизводимы, архив исходников для AMO | unit 178/178; локально `e2e.mjs` 46/46 с DSS, Firefox 7/7, `pades-crosscheck` 25. CI [43274778014](https://github.com/WHYbivatel/ecp_sign/actions/runs/43274778014): 16/16 зелёные; SHA-256 архивов Chromium и Firefox в CI совпали с локальными |
 
 Изменения ответов Common Utils (`a293148`, `05db357`, `9ae3817`) видны сайтам. До публикации их
 нужно проверить на сайтах, которые уже работают с Tegin через Common Utils.

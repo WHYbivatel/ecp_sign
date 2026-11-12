@@ -38,7 +38,7 @@
 | Нарушитель | Что может | Чем ограничено | Где проверено |
 |---|---|---|---|
 | Сайт из `*.kz` или его фрейм | Любые сообщения в сокет, повтор, гонки, большие данные, чужие методы | Origin из `sender.url`; новое подтверждение на каждый запрос; ответ только экземпляру моста с токеном; лимит 3 МБ; белые списки полей; срок 180 с | `tests/protocol.test.js`, `bridge.test.js`, `tests/e2e.mjs`, этап 3 в [extension-improvement-progress.md](extension-improvement-progress.md) |
-| Сайт, не являющийся порталом НУЦ | Вызов `generateCsr` и `importCertificate` | `ISSUANCE_ORIGINS`, `frameId === 0`, нет учётных данных в URL | `tests/e2e-issuance.mjs` (чужой origin, фрейм) |
+| Сайт, не являющийся порталом НУЦ | Вызов `generateCsr` и `importCertificate` | `ISSUANCE_ORIGINS`, `frameId === 0`, нет учётных данных в URL | `tests/e2e-issuance.mjs` и `e2e-issuance-firefox.mjs` (чужой и похожий origin, фрейм) |
 | Вредоносный файл | PKCS#12, CMS, XML, PDF, сертификат, CRL, OCSP: обход проверок, зависание | Строгий DER; ограничения итераций PBE и общего объёма KDF; DTD и сущности XML запрещены; глубина PDF ограничена | `tests/hardening.test.js`, `pkcs12-open.test.js`, фаззинг этапа 3 и `tests/fuzz-pdf.mjs` |
 | Сеть между браузером и НУЦ | Подмена OCSP по HTTP, старые ответы, подмена CRL | Подпись ответа, ответчик с EKU OCSPSigning от того же УЦ, nonce, свежесть ±5 мин, CertID; CRL: подпись, издатель, срок, IDP, delta | `tests/revocation.test.js` (24), `revocation-worker.test.js` (6), мутационная проверка |
 | Локальный доступ к профилю браузера | Чтение `storage.local` | Ключ заявки: AES-256-GCM, PBKDF2-SHA256 600 000, AAD — id записи и идентификаторы ключей. Пароль не хранится | `tests/issuance.test.js`, E2E выпуска |
@@ -52,7 +52,7 @@
 | Файл ключа | `crypto/signer.js` (`openContainer`) в Worker | до 4 МБ, проверка MAC, итерации ограничены |
 | CMS и цепочка от сайта | `crypto/cms-verify.js`, `chain.js` | форма RFC 5652 §5.3, подпись, срок, цепочка |
 | XML | `crypto/xml.js` (`@xmldom/xmldom`, `xml-crypto`) | DTD отклоняется, подписывается весь документ |
-| PDF (только локальный файл) | `crypto/pades.js` (разбор `pdf-lib`, своё инкрементальное обновление) | до 2 МБ, глубина 32, до 64 разделов ссылок; каждая используемая запись ссылок должна указывать на заголовок своего объекта; DocMDP, XFA, пустое поле подписи отклоняются; результат проверяется после подписи: исходные байты — префикс, прежние ByteRange не выходят за исходный файл, новая CMS проверяется |
+| PDF (только локальный файл) | `crypto/pades.js` (разбор `pdf-lib`, своё инкрементальное обновление) | до 2 МБ, глубина 32, до 64 разделов ссылок; каждая используемая запись ссылок должна указывать на заголовок своего объекта; DocMDP (`PDF_CERTIFIED`), XFA, пустое поле подписи отклоняются; прежняя подпись, запрещающая любые изменения (`/P 1` в `/Lock` поля или в FieldMDP), — отказ `PDF_LOCKED`; результат проверяется после подписи: исходные байты — префикс, прежние ByteRange не выходят за исходный файл, новая CMS проверяется |
 | Ответы OCSP, CRL, TSA | `crypto/ocsp.js`, `crl.js`, `timestamp.js` | только закреплённые URL, тип, размер, таймаут, без перенаправлений |
 | Резервная копия ключа заявки | `signing/issue.js` | до 64 КБ, проверка структуры; не заменяет сохранённую запись |
 
@@ -65,7 +65,7 @@
 ```bash
 npm ci
 npm run build              # dist/chromium, dist/firefox
-npm test                   # unit, 122 теста
+npm test                   # unit, 178 тестов
 npm run test:e2e           # браузерные E2E (Chromium)
 npm run test:e2e:firefox   # выпуск и проверка отзыва в Firefox
 node tests/e2e-revocation.mjs
@@ -76,16 +76,19 @@ DSS_VALIDATOR=<каталог> node tests/cades-lt-live.mjs         # то же 
 NCA_KALKAN_JARS=$(node scripts/fetch-kalkan.mjs .kalkan) node tests/kalkan-crosscheck.mjs
 ```
 
-- Две сборки подряд дают побайтно одинаковый `dist/`. Хеш `.zip` от `scripts/package.mjs`
-  не воспроизводится: `zip` пишет время файлов.
+- Две сборки подряд дают побайтно одинаковый `dist/`. Архивы `.zip` от `scripts/package.mjs` тоже
+  воспроизводимы: имена по порядку, фиксированные время и режим; `verify-package.mjs` упаковывает повторно
+  и сравнивает байты (в пределах одной линии Node, в CI — 22). Исходники для AMO —
+  `dist/tegin-source-<версия>.zip` (`git archive` коммита), без ключей, `.env`, `dist/` и `node_modules/`.
 - Тестовые сборки включаются только переменными `TEGIN_TEST_ISSUANCE_ANCHORS` и
   `TEGIN_TEST_REVOCATION_ISSUERS`. Каталог задаётся `TEGIN_DIST` вне `dist/`, в имени
   расширения есть пометка. В обычном `dist/` тестовых хуков, синтетических имён и паролей нет
   (проверено поиском 12.11.2026).
 - Kalkan 0.7.8 берётся из официального `ncalayer.zip` с закреплёнными SHA-256
   (`scripts/fetch-kalkan.mjs`).
-- CI: `.github/workflows/ci.yml`. Последний полный зелёный прогон — [43213439114](https://github.com/WHYbivatel/ecp_sign/actions/runs/43213439114) (`bae1400`):
-  unit на Windows, macOS и Ubuntu, E2E Chrome, Edge, Chromium и Firefox (включая проверку отзыва), Kalkan.
+- CI: `.github/workflows/ci.yml`. Последний полный прогон — [43274778014](https://github.com/WHYbivatel/ecp_sign/actions/runs/43274778014) (`1bc8bbb`):
+  unit на Windows, macOS и Ubuntu, E2E Chrome, Edge, Chromium и Firefox (включая проверку отзыва), Kalkan
+  (XML, PKCS#12, CSR), EU DSS и pyHanko (PAdES, CAdES-LT/LTA, PDF из браузера), упаковка с проверкой воспроизводимости.
 
 ## Тестовые данные
 
@@ -114,7 +117,7 @@ NCA_KALKAN_JARS=$(node scripts/fetch-kalkan.mjs .kalkan) node tests/kalkan-cross
 | Проверка отзыва в Firefox 160 | Новый `tests/e2e-revocation-firefox.mjs`, 4/4 на Windows x64, macOS ARM64 и Linux x64. Контроль: без разрешения на OCSP в манифесте тест падает |
 | Новый код после этапа 3 (выпуск ключа, хранение, Common Utils, PAdES) | Просмотрен. Нарушений границ доверия не найдено, одно замечание о сроке хранения (ниже) |
 | Фаззинг PDF | 2 × 3000 входов: отказы только своими кодами `PDF_*`, все принятые подписаны с самопроверкой, максимум 51 мс на разбор |
-| Воспроизводимость сборки | `dist/` совпадает побайтно |
+| Воспроизводимость сборки | `dist/` и архивы `.zip` совпадают побайтно |
 | Нестабильный E2E «закрытие вкладки» | Дефект расширения: окно не закрывалось, если его запрос завершался по сроку или после закрытия вкладки. Исправлено в `a0afa5c` |
 
 ## Открытые замечания и вопросы

@@ -747,18 +747,20 @@ NCA_KALKAN_JARS=/path/kalkancrypt-0.7.8.jar:/path/kalkancrypt_xmldsig-osgi-0.4.j
       Kalkan теперь получает копию файла с латинским именем.
 
 11. **Сверка форматов перед токенами.** Что закрыто независимой проверкой и чего не хватает.
-    - XML по XPath и доподписание. Закрыто: новый `tests/nursign-xml-crosscheck.mjs` (ручной запуск с
-      `ncalayer.zip`, не CI) прогоняет официальный `XMLUtil.verifyXmlSignature` и Santuario по каждой подписи на
+    - XML по XPath и доподписание. Закрыто: новый `tests/nursign-xml-crosscheck.mjs` (с `ncalayer.zip`, в CI —
+      задача `xml-official`) прогоняет официальный `XMLUtil.verifyXmlSignature` и Santuario по каждой подписи на
       результате Tegin: официальная RSA-подпись по XPath, затем ГОСТ-512 и RSA-доподписи Tegin над тем же
       элементом — все три подписи действительны, изменённая цена отклоняется. Раньше этот прогон описывался, но
       скрипта в репозитории не было. Пробелы:
       - защита от подмены структуры (XML wrapping) и повторяющихся `Id` проверена только тестами Tegin;
-      - в CI нет ни Kalkan XMLDSig, ни `XMLUtil`: независимые проверки XML запускаются вручную
-        (`kalkan-crosscheck.mjs`, `nursign-xml-crosscheck.mjs`);
+      - закрыто: Kalkan XMLDSig и `XMLUtil` в CI (`xml-official`: `kalkan-crosscheck.mjs`,
+        `nursign-xml-crosscheck.mjs` на наборах из `ncalayer.zip` и из каталога); там же с 12.11.2026
+        `kalkan-pkcs12.mjs` (Kalkan открывает PKCS#12 Tegin) и `kalkan-issuance.mjs` (CSR против эталонов NCALayer);
       - доподпись целого XML (без XPath) поверх подписи NCALayer не проверялась: Tegin её отклоняет.
     - PAdES инкрементально. Пробелы:
-      - EU DSS и pyHanko (`pades-crosscheck.mjs`) теперь в CI (задача `pades-independent`); блок `DSS_VALIDATOR` в
-        `e2e.mjs` (подпись из браузера) — по-прежнему вручную;
+      - EU DSS и pyHanko (`pades-crosscheck.mjs`, а с 12.11.2026 и `cades-lt-crosscheck.mjs`) в CI (задача
+        `pades-independent`); блок `DSS_VALIDATOR` в `e2e.mjs` (подпись из браузера) выполняется в `full-e2e-linux`,
+        а `TEGIN_REQUIRE_DSS` не даёт ему тихо пропуститься;
       - закрыто 12.11.2026: неподписанная инкрементальная ревизия до и после подписи, гибридные ссылки `/XRefStm`
         (самодельный файл: таблица, поток ссылок и шрифт в потоке объектов), FieldMDP и `/Lock`. Найдена ошибка:
         если прежняя подпись запрещала любые изменения (`/P 1` в `/Lock` поля или в параметрах FieldMDP), Tegin
@@ -767,11 +769,13 @@ NCA_KALKAN_JARS=/path/kalkancrypt-0.7.8.jar:/path/kalkancrypt_xmldsig-osgi-0.4.j
         проверять любые подписи в гибридных файлах (защита от разного прочтения таблицы и потока ссылок): у
         получателя с такой настройкой подпись Tegin на гибридном PDF не проверится. Отказывать ли в подписи
         гибридных PDF — решение владельца, сейчас Tegin их подписывает. DSS 6.5.1 не применяет `/Lock`;
-      - не проверен настоящий сертифицированный (DocMDP) PDF от другой программы (Tegin отказывает по `/Perms`);
-        гибридный файл от настоящего редактора (например, Word) не проверялся, только самодельный;
+      - закрыто 12.11.2026: сертифицирующая подпись другой программы — pyHanko с DocMDP `/P 1`, `2` и `3`. DSS
+        (`NO_CHANGE_PERMITTED`, `MINIMAL_CHANGES_PERMITTED`, `CHANGES_PERMITTED`) и pyHanko видят уровень, Tegin
+        отказывает с `PDF_CERTIFIED` в разборе и в подписи, входные байты не меняются. Сертифицированный PDF из
+        Acrobat не проверялся; гибридный файл от настоящего редактора (например, Word) тоже, только самодельный;
       - отказ для зашифрованного PDF в CI проверен только на синтетическом `/Encrypt`.
-    - Вторая подпись. PAdES: вторая подпись в CI проверяется только Tegin `verifyCms`, префиксом байтов и числом
-      ByteRange; DSS и pyHanko (16/16) — вручную. CMS: второй подписант (параллельная подпись или
+    - Вторая подпись. PAdES: в CI проверяют DSS и pyHanko — файлы из Node (`pades-independent`) и вторую подпись
+      из браузера (`full-e2e-linux`). CMS: второй подписант (параллельная подпись или
       контрподпись) не реализован, `cms.js` создаёт один `SignerInfo`, `Verify.java` отклоняет больше одного.
     - `verification.md` (версия 0.3) и `architecture.md` называют Kalkan XMLDSig 0.5.1; текущие сверки используют 0.4
       из `ncalayer.zip`. Версию 0.3 проверяли тогда с 0.5.1, записи исторические.
@@ -847,15 +851,28 @@ NCA_KALKAN_JARS=/path/kalkancrypt-0.7.8.jar:/path/kalkancrypt_xmldsig-osgi-0.4.j
       поля этого браузера (слот, статус установки). Unit: содержимое совпадает с исходной записью и проходит проверку
       восстановления; E2E Chromium: кнопки нет у записи с `.p12`, скачанный файл совпадает с записью в хранилище.
       Firefox E2E (`tests/e2e-issuance-firefox.mjs`, Firefox 160, Linux x64): выгрузка из «Ключей заявок», удаление
-      записи, установка сертификата из выгруженной копии и отказ похожему домену без окна. Перезапуск Firefox
-      и отказ из iframe по-прежнему проверены только в Chromium.
+      записи, установка сертификата из выгруженной копии и отказ похожему домену без окна. С `1bc8bbb` там же
+      отказ фрейму внутри портала без окна и перезапуск Firefox на том же профиле: временное дополнение ставится
+      заново с тем же ID и UUID, записи заявок в `storage.local` сохраняются. Перезапуск подписанной сборки из AMO
+      не проверялся.
+    - Архивы для магазинов воспроизводимы побайтно: `scripts/package.mjs` пишет ZIP сам (имена по порядку, без
+      каталогов, время 1980-01-01, режим 0644), `verify-package.mjs` упаковывает `dist/<target>` повторно и
+      сравнивает байты. Для AMO собирается `dist/tegin-source-<версия>.zip` — `git archive` текущего коммита;
+      проверка: нет `.p12`, `.pfx`, `.env`, `dist/`, `node_modules/`, повторный `git archive` даёт те же байты.
+      Хеш ZIP зависит от zlib в Node, поэтому совпадает в пределах одной линии Node (в CI — 22).
 
 Причина исходной ошибки с пользовательским контейнером (этап 0) по-прежнему не подтверждена:
 повторной проверки не было.
 
-| Проверка на `f748a81` (локально) | Результат |
+| Проверка на `1bc8bbb` (локально, 12.11.2026) | Результат |
 |---|---|
-| `npm test` | 120/120 |
-| `tests/e2e.mjs` | 38/38 |
-| `tests/e2e-issuance.mjs`, `tests/e2e-revocation.mjs` | код выхода 0 |
-| `tests/e2e-issuance-firefox.mjs` (Firefox 160) | 5/5 |
+| `npm test` | 178/178 |
+| `tests/e2e.mjs` с `DSS_VALIDATOR` и `TEGIN_REQUIRE_DSS` | 46/46, PDF из браузера проверены DSS и pyHanko |
+| `tests/e2e-issuance-firefox.mjs` (Firefox 160, Linux x64, с Kalkan) | 7/7 |
+| `tests/pades-crosscheck.mjs` (EU DSS 6.5.1, pyHanko 0.38.0) | 25 проверок |
+| `tests/cades-lt-crosscheck.mjs` | 11/11 |
+| `tests/kalkan-pkcs12.mjs`, `tests/kalkan-issuance.mjs` | код выхода 0 |
+| `npm run package` дважды, `verify-package.mjs --smoke`, `addons-linter` | одинаковые SHA-256; проверки архивов и исходников пройдены; 0 ошибок |
+
+Полный набор в CI: [прогон 43274778014](https://github.com/WHYbivatel/ecp_sign/actions/runs/43274778014) (`1bc8bbb`), 16/16 зелёные;
+SHA-256 архивов Chromium и Firefox в CI совпали с локальными.

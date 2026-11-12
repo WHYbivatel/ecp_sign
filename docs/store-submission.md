@@ -7,7 +7,13 @@
 ## Артефакты и их проверка
 
 - Сборка: `npm run verify:package` — `npm run package` (`dist/tegin-chromium-<версия>.zip`,
-  `dist/tegin-firefox-<версия>.zip`, `dist/checksums.json`), затем `scripts/verify-package.mjs --smoke`.
+  `dist/tegin-firefox-<версия>.zip`, исходники для AMO `dist/tegin-source-<версия>.zip`, `dist/checksums.json`),
+  затем `scripts/verify-package.mjs --smoke`.
+- Архивы воспроизводимы побайтно: имена по порядку, без каталогов, время 1980-01-01, режим 0644; повторная
+  упаковка `dist/<target>` даёт те же байты (в пределах одной линии Node — хеш зависит от zlib, в CI Node 22).
+  Архив исходников — `git archive` текущего коммита: без `.p12`, `.pfx`, `.env`, `dist/` и `node_modules/`,
+  повторный `git archive` даёт те же байты. При незакоммиченных изменениях `package.mjs` предупреждает, что
+  исходники не совпадают с собранным.
 - Что проверяется в самих архивах: версия манифеста равна `package.json`; все файлы, на которые ссылаются манифест
   и страницы, на месте; нет тестовой сборки, source map, ключей, `.env`, `node_modules`, тестов; CSP `script-src
   'self'`, нет удалённых скриптов; содержимое побайтно равно `dist/<target>`; SHA-256 равен `checksums.json`.
@@ -16,7 +22,7 @@
 - Firefox-архив проходит официальный валидатор AMO `addons-linter` 10.15.0: 12.11.2026 — 0 ошибок, 1
   предупреждение (`data_collection_permissions` не поддерживается минимальной версией Firefox для Android; Android
   не заявляется).
-- CI (задача `package`) выполняет то же и выкладывает архивы артефактом `tegin-packages-<sha>` на 14 дней.
+- CI (задача `package`) выполняет то же и выкладывает архивы (включая исходники) артефактом `tegin-packages-<sha>` на 14 дней.
   Подавать в магазин нужно архив, прошедший эти проверки, а не пересобранный вручную.
 
 ## Назначение (single purpose)
@@ -49,9 +55,9 @@ Store; это ожидаемо.
 > their responses are data (OCSP, CRL, timestamps), never code.
 
 Код собран esbuild и минифицирован, не обфусцирован. **AMO требует исходный код** для минифицированных файлов:
-приложить архив исходников коммита (`git archive`) и инструкцию сборки (Node 22, `npm ci`, `npm run build`,
-результат — `dist/firefox`; сборка воспроизводится побайтно, `tests/build-paths.test.js` и раздел «Сверка ветки»
-в журнале работ).
+приложить `dist/tegin-source-<версия>.zip` (собирается `npm run package`) и инструкцию сборки (Node 22,
+`npm ci`, `npm run build`, результат — `dist/firefox`; сборка воспроизводится побайтно, `tests/build-paths.test.js`
+и раздел «Сверка ветки» в журнале работ).
 
 ## Данные (Chrome «Privacy practices», Edge, AMO)
 
