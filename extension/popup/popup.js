@@ -32,11 +32,15 @@ if (new URLSearchParams(location.search).has('workspace')) document.body.setAttr
 document.querySelector('#local').addEventListener('click', () => openTool());
 document.querySelector('#verify').addEventListener('click', () => openTool('verify'));
 // A file chooser can close the action popup, so the password tool opens in a tab.
-document.querySelector('#change-password').addEventListener('click', async () => {
+async function openPasswordTool() {
   const url = api.runtime.getURL('password/index.html');
   if (new URLSearchParams(location.search).has('workspace')) { location.assign(url); return; }
   try { await api.tabs.create({ url }); window.close(); } catch (error) { status.textContent = error.message; }
-});
+}
+document.querySelector('#change-password').addEventListener('click', openPasswordTool);
+document.querySelector('#password-hint').addEventListener('click', openPasswordTool);
+// The NCA password form (pki.gov.kz) starts with Applet.browseKeyStore, which Tegin refuses.
+const PASSWORD_FORM_METHODS = ['browseKeyStore', 'changePassword'];
 const STAGES = { refused: 'Отклонён', answered: 'Отвечен сразу', window: 'Открыто окно Tegin' };
 const FINAL = { ok: 'Выполнен', cancelled: 'Отменён' };
 async function showLog(tabId) {
@@ -49,6 +53,7 @@ async function showLog(tabId) {
   document.querySelector('#log-result').toggleAttribute('data-failed', failed);
   document.querySelector('#log-reason').textContent = entry.reason || '—';
   document.querySelector('#site-log').hidden = false;
+  document.querySelector('#password-hint').hidden = !(entry.stage === 'refused' && PASSWORD_FORM_METHODS.includes(entry.method) && (!entry.module || entry.module === 'kz.gov.pki.knca.applet.Applet'));
 }
 document.querySelector('#version').textContent = api.runtime.getManifest().version;
 async function loadSite() {

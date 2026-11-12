@@ -613,9 +613,28 @@ try {
   const passwordTool = await context.newPage();
   await passwordTool.goto(`chrome-extension://${extensionId}/password/index.html`);
   const NEW_PASSWORD = 'NewPass2026';
+  const passwordDownloads = [];
+  passwordTool.on('download', item => passwordDownloads.push(item));
   for (const [label, key] of [['RSA', fixture.container], ['GOST 512', gost.container]]) {
     const original = Buffer.from(key);
     await passwordTool.locator('#key-file').setInputFiles({ name: 'disposable-key.p12', mimeType: 'application/x-pkcs12', buffer: original });
+    // A cancelled file chooser keeps the selection; a cancelled operation (button, then Escape) leaves no
+    // result and no download, wipes the passwords and returns the form.
+    await passwordTool.locator('#key-file').setInputFiles([]);
+    assert.equal(await passwordTool.locator('#key-name').textContent(), 'disposable-key.p12');
+    for (const how of ['button', 'Escape']) {
+      await passwordTool.locator('#old-password').fill(PASSWORD);
+      for (const field of ['#new-password', '#repeat-password']) await passwordTool.locator(field).fill(NEW_PASSWORD);
+      await passwordTool.locator('#submit').click();
+      if (how === 'button') await passwordTool.locator('#cancel').click(); else await passwordTool.keyboard.press('Escape');
+      await passwordTool.locator('#status').filter({ hasText: 'Смена пароля отменена' }).waitFor();
+      assert.equal(await passwordTool.locator('#result').isHidden(), true, `${label}: no result after cancel (${how})`);
+      assert.equal(await passwordTool.locator('#cancel').isHidden(), true);
+      for (const field of ['#old-password', '#new-password', '#repeat-password']) assert.equal(await passwordTool.locator(field).inputValue(), '', `${label}: ${field} wiped after cancel`);
+      assert.equal(await passwordTool.locator('#submit').isDisabled(), true);
+      if (label === 'RSA' && how === 'button') await passwordTool.screenshot({ path: resolve('artifacts/password-cancelled.png'), fullPage: true });
+    }
+    assert.equal(passwordDownloads.length, label === 'RSA' ? 0 : 1, 'cancel produces no download');
     await passwordTool.locator('#old-password').fill(PASSWORD + 'x');
     for (const field of ['#new-password', '#repeat-password']) await passwordTool.locator(field).fill('onlyletters');
     assert.equal(await passwordTool.locator('#submit').isDisabled(), true, 'weak new password blocks the change');
@@ -649,7 +668,7 @@ try {
     await check.close();
     await passwordTool.locator('#again').click();
     await passwordTool.locator('#change-form:not([hidden])').waitFor();
-    console.log(`PASS: password change ${label}: wrong old and weak new passwords refused, the copy opens with the new password in the signing tool, the old password fails, key and certificates unchanged, original untouched`);
+    console.log(`PASS: password change ${label}: cancelled file choice and cancelled operation (button, Escape) leave no file and wipe passwords; wrong old and weak new passwords refused, the copy opens with the new password in the signing tool, the old password fails, key and certificates unchanged, original untouched`);
   }
   await passwordTool.setViewportSize({ width: 400, height: 900 });
   await passwordTool.screenshot({ path: resolve('artifacts/password-400.png'), fullPage: true });
@@ -723,7 +742,20 @@ try {
     assert.match(answer.message, /Сменить пароль ключа/);
   }
   assert.equal(context.pages().some(item => item.url().includes('/signing/approve.html#')), false);
-  console.log('PASS: NUC password page calls (browseKeyStore, changePassword) refused with a pointer to the local tool, no window opened');
+  // The popup log of that tab names the refused call and offers the local tool.
+  const hint = await context.newPage();
+  await hint.goto(`chrome-extension://${extensionId}/index.html?workspace=1`);
+  const siteTab = await hint.evaluate(url => chrome.tabs.query({}).then(tabs => tabs.find(tab => tab.url === url)?.id), page.url());
+  await hint.goto(`chrome-extension://${extensionId}/index.html?workspace=1&site=${siteTab}`);
+  await hint.locator('#site-log:not([hidden])').waitFor();
+  assert.equal(await hint.locator('#log-method').textContent(), 'changePassword');
+  assert.match(await hint.locator('#log-reason').textContent(), /Сменить пароль ключа/);
+  await hint.setViewportSize({ width: 420, height: 720 });
+  await hint.screenshot({ path: resolve('artifacts/popup-password-hint.png'), fullPage: true });
+  await hint.locator('#password-hint').click();
+  await hint.waitForURL(`chrome-extension://${extensionId}/password/index.html`);
+  await hint.close();
+  console.log('PASS: NUC password page calls (browseKeyStore, changePassword) refused with a pointer to the local tool, no window opened; the popup offers the tool');
 
   await send({ ...basics, args: { ...basics.args, signingParams: { tsaProfile: {} } } });
   answer = await result();
