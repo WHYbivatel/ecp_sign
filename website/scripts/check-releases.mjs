@@ -40,8 +40,37 @@ for (const step of [
   'Откройте Tegin Sign и выберите «Подписать файл» или «Проверить подпись».',
 ]) assert.ok(html.includes(step), `installation instruction is missing: ${step}`);
 
-assert.ok(html.includes('/downloads/tegin-chromium-0.5.2.zip'), 'Chromium/Edge download link was removed');
+const chromium = metadata.releases.find(({ platform }) => platform === 'chromium');
+assert.ok(chromium, 'Chromium release is missing from releases.json');
+assert.deepEqual(chromium.browsers, ['chrome', 'edge']);
+assert.match(chromium.version, /^\d+\.\d+\.\d+$/);
+assert.match(chromium.sourceCommit, /^[a-f0-9]{7,40}$/);
+for (const build of [chromium, chromium.rollback]) {
+  assert.ok(build, 'Chromium rollback build is missing from releases.json');
+  assert.equal(build.file, `tegin-chromium-${build.version}-${build.sourceCommit}.zip`, 'Chromium archive name must carry the source commit');
+  assert.equal(build.url, `https://tegin.esl.kz/downloads/${build.file}`);
+  assert.match(build.sha256, /^[a-f0-9]{64}$/);
+  assert.ok(Number.isSafeInteger(build.size) && build.size > 0);
+}
+assert.notEqual(chromium.file, chromium.rollback.file, 'rollback must be a different archive');
+assert.match(chromium.publishedAt, /^\d{4}-\d{2}-\d{2}$/);
+const chromiumLink = new RegExp(
+  `<a\\b(?=[^>]*data-release-platform="chromium")(?=[^>]*href="/downloads/${chromium.file}")(?=[^>]*download="${chromium.file}")[^>]*>[\\s\\S]*?Скачать для Chrome и Edge[\\s\\S]*?<\\/a>`,
+);
+assert.match(html, chromiumLink, 'Chromium download link differs from releases.json');
+assert.ok(html.includes(`Chrome и Edge ${chromium.version} (сборка ${chromium.sourceCommit})`), 'Chromium version label is stale');
 assert.ok(html.includes('/downloads/tegin-firefox-0.5.2.zip'), 'Firefox download link was removed');
+
+const chromiumZip = valueFor('--chromium-zip');
+if (chromiumZip) {
+  const bytes = await readFile(path.resolve(chromiumZip));
+  assert.equal(bytes.length, chromium.size, 'Chromium archive byte size differs from releases.json');
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), chromium.sha256, 'Chromium archive SHA-256 differs from releases.json');
+  const { execFileSync } = await import('node:child_process');
+  const manifest = JSON.parse(execFileSync('unzip', ['-p', path.resolve(chromiumZip), 'manifest.json'], { encoding: 'utf8' }));
+  assert.equal(manifest.version, chromium.version, 'Chromium manifest version differs from releases.json');
+  assert.equal(manifest.manifest_version, 3);
+}
 
 const apkPath = valueFor('--apk');
 if (apkPath) {
@@ -66,3 +95,4 @@ if (docRoot) {
 }
 
 console.log(`Release metadata consistent: Android ${android.version} (${android.size} bytes, SHA-256 ${android.sha256})`);
+console.log(`Release metadata consistent: Chromium ${chromium.version} from ${chromium.sourceCommit} (${chromium.size} bytes, SHA-256 ${chromium.sha256})`);

@@ -13,6 +13,25 @@
       "signerCertificateSha256": "d986524cf037ddbf28cd9891e29568a46d56c9da88d4763cf6c7e5c14eabe82a",
       "sourceCommit": "f36e95c",
       "publishedAt": "2026-11-05"
+    },
+    {
+      "platform": "chromium",
+      "browsers": ["chrome", "edge"],
+      "version": "0.5.3",
+      "file": "tegin-chromium-0.5.3-dd40b5e.zip",
+      "url": "https://tegin.esl.kz/downloads/tegin-chromium-0.5.3-dd40b5e.zip",
+      "size": 513484,
+      "sha256": "d2872b7e06df7fe73bcbe060dd4bb85cdc0a318bbec0495300decb53a24c7651",
+      "sourceCommit": "dd40b5e",
+      "publishedAt": "2026-11-12",
+      "rollback": {
+        "version": "0.5.3",
+        "file": "tegin-chromium-0.5.3-71a68ff.zip",
+        "url": "https://tegin.esl.kz/downloads/tegin-chromium-0.5.3-71a68ff.zip",
+        "size": 513328,
+        "sha256": "86a894068baf1e19eb3cfc0361a9a1988767ede38d62d9442cce7951df33f5c6",
+        "sourceCommit": "71a68ff"
+      }
     }
   ]
 }
