@@ -24,7 +24,8 @@ const hex = value => Buffer.from(value, 'binary').toString('hex');
 const pemBody = pem => unbase64(pem.split('\n').filter(line => line && !line.startsWith('-----')).join(''));
 // Shaped like a first-head application of a legal entity (synthetic values).
 const dn = { '2.5.4.3': 'ТЕСТОВ ТЕСТ', '2.5.4.4': 'ТЕСТОВ', '2.5.4.5': 'IIN000000000000', '2.5.4.6': 'KZ', '2.5.4.42': 'ТЕСТҰЛЫ', '2.5.4.10': 'ТОО «ҚАЗАҚ СИНТЕТИКА»', '2.5.4.11': 'BIN000000000000', '1.2.840.113549.1.9.1': 'test@example.kz' };
-const families = [['GOST512', 'ECGOST3410-2015', 512], ['GOST256', 'ECGOST3410-2015', 256], ['RSA', 'RSA', 2048]];
+// The live step-3 page names GOST-512 by its OID; Kalkan compares it with its own GOST512 request.
+const families = [['GOST512', 'ECGOST3410-2015', 512], ['GOST512 (portal OID)', '1.2.398.3.10.1.1.2.3.2', 512, 'GOST512'], ['GOST256', 'ECGOST3410-2015', 256], ['RSA', 'RSA', 2048]];
 try {
   execFileSync(javac, ['-cp', jars, '-d', folder, resolve('tests/interop/IssuanceInterop.java'), resolve('tests/interop/Pkcs12Interop.java'), resolve('tests/interop/Verify.java')], { stdio: 'pipe' });
   const dnPath = join(folder, 'dn.tsv');
@@ -34,7 +35,7 @@ try {
   assert.equal(hex(der(encodeName(Object.entries(dn)))), kalkanName);
   console.log('PASS subject DER equals Kalkan X509Name for the same OID/value list (UTF8String, PrintableString, IA5String)');
 
-  for (const [family, algorithm, length] of families) {
+  for (const [family, algorithm, length, profile = family] of families) {
     const request = normalizeIssuance({ module: 'kz.gov.pki.knca.basics', method: 'generateCsr', class: 'PKIEssentials',
       args: { dn, email: '', subjectAltNames: '', params: [{ algorithm, length }], locale: 'ru', omittedKeyIds: [''] } });
     const generated = await generateRequest(request, PASSWORD, family);
@@ -44,7 +45,7 @@ try {
     assert.match(run('IssuanceInterop', 'csr', csrPath), /KALKAN CSR VALID/);
     // Structure next to a request Kalkan generates itself from the same subject.
     const kalkanPath = join(folder, 'kalkan.csr');
-    run('IssuanceInterop', 'request', family, dnPath, kalkanPath);
+    run('IssuanceInterop', 'request', profile, dnPath, kalkanPath);
     const ours = parse(csr), theirs = parse(new Uint8Array(readFileSync(kalkanPath)));
     assert.equal(der(ours.value[0].value[1]), der(theirs.value[0].value[1]), 'subject');
     assert.equal(der(ours.value[0].value[2].value[0]), der(theirs.value[0].value[2].value[0]), 'public key algorithm');

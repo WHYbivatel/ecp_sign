@@ -7,6 +7,9 @@ export const PKI_CLASS = 'PKIEssentials';
 // cabinet (/ua/) on nca.pki.gov.kz loads the same two scripts.
 export const ISSUANCE_ORIGINS = Object.freeze(['https://did.pki.gov.kz', 'https://nca.pki.gov.kz']);
 export const ALGORITHMS = Object.freeze({ 'ECGOST3410-2015': [256, 512], RSA: [2048, 3072, 4096] });
+// The live step-3 page sends the GOST 34.10-2015 512-bit signature OID instead of a profile name.
+// Only the exact OID/length pair maps; the profile itself (key OID, curve T-512-A, hash) is unchanged.
+export const ALGORITHM_OIDS = Object.freeze({ '1.2.398.3.10.1.1.2.3.2': Object.freeze({ algorithm: 'ECGOST3410-2015', length: 512 }) });
 // The NUC application and its help pages ask for this password policy; ASCII only, so every
 // PKCS#12 reader derives the same key bytes from it.
 export const PASSWORD_RULE = /^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)[A-Za-z\d#$^+=!*()@%&_?.-]{8,64}$/;
@@ -59,6 +62,8 @@ function keyParams(params) {
   if (!Array.isArray(params) || !params.length || params.length > 4) fail('GENKEY_UNKNOWN_ALG', 'Не указаны параметры ключа.');
   return params.map(item => {
     if (!object(item) || Object.keys(item).some(key => !['algorithm', 'length'].includes(key))) fail('GENKEY_UNKNOWN_ALG', 'Некорректные параметры ключа.');
+    const profile = typeof item.algorithm === 'string' && Object.hasOwn(ALGORITHM_OIDS, item.algorithm) ? ALGORITHM_OIDS[item.algorithm] : null;
+    if (profile && profile.length === item.length) return { algorithm: profile.algorithm, length: profile.length };
     const lengths = typeof item.algorithm === 'string' && Object.hasOwn(ALGORITHMS, item.algorithm) ? ALGORITHMS[item.algorithm] : null;
     if (!lengths || !lengths.includes(item.length)) {
       const name = typeof item.algorithm === 'string' && /^[\w.-]{1,40}$/.test(item.algorithm) ? item.algorithm : 'неизвестный';

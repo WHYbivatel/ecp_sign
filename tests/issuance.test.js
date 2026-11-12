@@ -10,7 +10,7 @@ import { openContainer } from '../extension/crypto/signer.js';
 import { signCms } from '../extension/crypto/cms.js';
 import { verifyCms } from '../extension/crypto/cms-verify.js';
 import { verifyChain } from '../extension/crypto/chain.js';
-import { unbase64, der, binary, parse } from '../extension/crypto/encoding.js';
+import { unbase64, der, binary, parse, forge } from '../extension/crypto/encoding.js';
 import { gostHierarchy, issueFromCsr } from './helpers/gost-ca.js';
 
 const PASSWORD = 'Tegin-Test-2026';
@@ -38,6 +38,11 @@ test('generateCsr and importCertificate are normalized in the shape the NUC port
   fails(generateCall({ allowedStorages: ['AKKaztokenStore'] }), 'STORAGE_NOT_SUPPORTED');
   fails(generateCall({ params: [{ algorithm: 'ECGOST34310', length: 256 }] }), 'GENKEY_UNKNOWN_ALG');
   fails(generateCall({ params: [{ algorithm: 'ECGOST3410-2015', length: null }] }), 'GENKEY_UNKNOWN_ALG');
+  // Observed on the live step-3 page: the GOST 34.10-2015 512-bit OID instead of the profile name.
+  const GOST512_OID = '1.2.398.3.10.1.1.2.3.2';
+  assert.deepEqual(normalizeIssuance(generateCall({ params: [{ algorithm: GOST512_OID, length: 512 }] })).keys, [{ algorithm: 'ECGOST3410-2015', length: 512 }]);
+  for (const length of [256, 1024, '512', null]) fails(generateCall({ params: [{ algorithm: GOST512_OID, length }] }), 'GENKEY_UNKNOWN_ALG');
+  for (const algorithm of ['1.2.398.3.10.1.1.2.3.1', '1.2.398.3.10.1.1.2.2', '1.2.398.3.10.1.1.2.3.2.1', '1.2.398.3.10.1.1.2.3.20']) fails(generateCall({ params: [{ algorithm, length: 512 }] }), 'GENKEY_UNKNOWN_ALG');
   fails(generateCall({ dn: {} }), 'GENKEY_EMPTY_DN');
   fails(generateCall({ dn: { ...DN, '2.5.4.6': 'Kazakhstan' } }), 'GENKEY_INCORRECT_DN_VALUE');
   fails(generateCall({ dn: { ...DN, '2.5.4.5': 'ИИН000000000000' } }), 'GENKEY_INCORRECT_DN_VALUE');
@@ -104,6 +109,21 @@ function opensslIssue(csrPem) {
     return { text, leaf: read('leaf.der'), root: read('root.der') };
   } finally { rmSync(folder, { recursive: true, force: true }); }
 }
+
+test('the portal GOST-512 OID pair yields the same GOST 34.10-2015 512-bit request as the profile name', async () => {
+  const request = normalizeIssuance(generateCall({ params: [{ algorithm: '1.2.398.3.10.1.1.2.3.2', length: 512 }] }));
+  const generated = await generateRequest(request, PASSWORD, 'oid-512');
+  const csr = pemBody(generated.pems[0]);
+  await verifyCsr(csr);
+  const oid = node => forge.asn1.derToOid(node.value);
+  const [info, signatureAlgorithm] = parse(csr).value;
+  const [keyAlgorithm] = info.value[2].value;
+  assert.equal(oid(keyAlgorithm.value[0]), '1.2.398.3.10.1.1.2.2');
+  assert.equal(oid(keyAlgorithm.value[1].value[0]), '1.2.398.3.10.1.1.2.2.1');
+  assert.equal(oid(signatureAlgorithm.value[0]), '1.2.398.3.10.1.1.2.3.2');
+  assert.equal(info.value[2].value[1].value[0].value.length, 128, 'public point is a 128-byte OCTET STRING');
+  assert.deepEqual(generated.algorithms, (await generateRequest(normalizeIssuance(generateCall()), PASSWORD, 'name-512')).algorithms);
+});
 
 for (const params of [{ algorithm: 'ECGOST3410-2015', length: 512 }, { algorithm: 'ECGOST3410-2015', length: 256 }, { algorithm: 'RSA', length: 2048 }]) {
   test(`${params.algorithm} ${params.length}: request, issuance from it, installation, signing with the saved .p12`, async () => {
