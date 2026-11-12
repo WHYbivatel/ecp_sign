@@ -139,7 +139,10 @@ async function handle(message, sender) {
     return { ok: true };
   }
   if (!await alive(record)) {
-    await abandon(record, 'Страница закрыта, изменена или время запроса истекло.');
+    // The alarm and tabs.onRemoved find nothing pending once this ends the request, so they cannot close the window.
+    if (Date.now() > record.expires) await closeRequest(record, 'Время подтверждения истекло.');
+    else if (!await api.tabs.get(record.tabId).catch(() => null)) await closeRequest(record, 'Страница закрыта.');
+    else await abandon(record, 'Страница изменена или не отвечает.');
     throw new Error('Исходная страница больше не доступна.');
   }
   const module = record.normalized.issuance ? null : findModule(record.request.module);

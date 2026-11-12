@@ -973,15 +973,16 @@ try {
   await freshPopup.close();
   await noPending();
   await openSocket(child, frameRequest('closing tab'));
-  const orphanId = await sw.evaluate(() => new Promise(resolve => {
-    const check = async () => { const found = Object.entries(await chrome.storage.session.get(null)).find(([key, record]) => key.startsWith('pending:') && record.windowId && JSON.stringify(record.request).includes('closing tab')); found ? resolve(found[1].id) : setTimeout(check, 100); };
+  const { id: orphanId, tabId: orphanTab } = await sw.evaluate(() => new Promise(resolve => {
+    const check = async () => { const found = Object.entries(await chrome.storage.session.get(null)).find(([key, record]) => key.startsWith('pending:') && record.windowId && JSON.stringify(record.request).includes('closing tab')); found ? resolve(found[1]) : setTimeout(check, 100); };
     check();
   }));
   let orphan;
   for (let attempt = 0; attempt < 150 && !orphan; attempt++) { orphan = context.pages().find(item => item.url().endsWith(`#${orphanId}`)); if (!orphan) await new Promise(resolve => setTimeout(resolve, 100)); }
   assert.ok(orphan, 'approval window for the closing tab request');
   const orphanClosed = orphan.waitForEvent('close');
-  await framePage.close();
+  // The window asks for its request while the tab is closing: whichever runs first, the window must close.
+  await orphan.evaluate(([id, tabId]) => { chrome.runtime.sendMessage({ kind: 'nca:get', id }).catch(() => {}); chrome.tabs.remove(tabId); }, [orphanId, orphanTab]);
   try { await orphanClosed; } catch (error) {
     console.error('tab-close diagnostic', JSON.stringify(await sw.evaluate(async id => {
       const pendingKeys = Object.keys(await chrome.storage.session.get(null)).filter(key => key.startsWith('pending:'));
