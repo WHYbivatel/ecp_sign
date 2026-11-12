@@ -14,3 +14,4 @@ artifacts/
 *.p8
 *.log
 .kalkan/
+.browsers/

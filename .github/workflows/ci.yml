@@ -57,6 +57,9 @@ jobs:
           - { os: macos-latest, browser: chrome }
           - { os: ubuntu-latest, browser: chrome }
           - { os: ubuntu-latest, browser: chromium }
+          - { os: windows-latest, browser: firefox }
+          - { os: macos-latest, browser: firefox }
+          - { os: ubuntu-latest, browser: firefox }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
@@ -83,6 +86,12 @@ jobs:
           if [ "$TEGIN_BROWSER" = chromium ]; then npx playwright install --with-deps chromium; fi
           if [ "$TEGIN_BROWSER" = msedge ]; then npx playwright install msedge || true; fi
           if [ "$TEGIN_BROWSER" = chrome ]; then npx playwright install chrome || true; fi
+      - name: Firefox stable cache
+        if: matrix.browser == 'firefox'
+        uses: actions/cache@v4
+        with:
+          path: .browsers
+          key: firefox-stable-${{ runner.os }}-${{ runner.arch }}
       - name: Kalkan jars (official NCALayer archive, pinned SHA-256)
         id: kalkan
         uses: actions/cache@v4
@@ -93,7 +102,9 @@ jobs:
         shell: bash
         run: echo "NCA_KALKAN_JARS=$(node scripts/fetch-kalkan.mjs .kalkan)" >> "$GITHUB_ENV"
       - name: Issuance, installation, reopen .p12, signature checked by Kalkan
-        run: node tests/e2e-issuance.mjs
+        shell: bash
+        run: |
+          if [ "$TEGIN_BROWSER" = firefox ]; then node tests/e2e-issuance-firefox.mjs; else node tests/e2e-issuance.mjs; fi
       - name: Screenshots on failure
         if: failure()
         uses: actions/upload-artifact@v4
