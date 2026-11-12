@@ -1,8 +1,8 @@
-import { O, seq, set, oid, octet, integer, context, der, algorithm, bytes } from './encoding.js';
+import { A, O, seq, set, oid, octet, integer, context, der, algorithm, bytes } from './encoding.js';
 import { requestTimestamp } from './timestamp.js';
 
 // RFC 5652 SignedData; requested RFC3161 timestamps are verified before inclusion.
-export async function signCms(signer, data, { encapsulate = true, cades = false, digested = false, timestamp = false, timestampRequester = requestTimestamp, onTimestamp } = {}) {
+export async function signCms(signer, data, { encapsulate = true, cades = false, digested = false, timestamp = false, timestampRequester = requestTimestamp, onTimestamp, signingTime } = {}) {
   if (digested && encapsulate) throw new Error('Для готового хеша допустима только отдельная подпись.');
   const contentDigest = digested ? data : null;
   if (digested && data.length !== (signer.info.keyOid === O.rsa ? 32 : signer.info.algorithm.length / 8)) throw new Error('Длина хеша не соответствует алгоритму сертификата.');
@@ -11,6 +11,10 @@ export async function signCms(signer, data, { encapsulate = true, cades = false,
     const certHash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes(signer.info.raw)));
     attributes = set(
       seq(oid('1.2.840.113549.1.9.3'), set(oid(O.data))),
+      // EN 319 122-1 B-B requires signing-time; only the long-term formats request it.
+      ...(signingTime ? [seq(oid('1.2.840.113549.1.9.5'), set(signingTime.getUTCFullYear() < 2050
+        ? A.create(0, A.Type.UTCTIME, false, A.dateToUtcTime(signingTime))
+        : A.create(0, A.Type.GENERALIZEDTIME, false, A.dateToGeneralizedTime(signingTime))))] : []),
       seq(oid('1.2.840.113549.1.9.4'), set(octet(contentDigest || await signer.digest(data)))),
       // RFC 5035 SigningCertificateV2: SHA-256 is the omitted default algorithm.
       seq(oid('1.2.840.113549.1.9.16.2.47'), set(seq(seq(seq(octet(certHash))))))

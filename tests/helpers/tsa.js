@@ -2,7 +2,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { A, seq, oid, integer, der, bytes, parse, oidValue } from '../../extension/crypto/encoding.js';
+import { A, seq, oid, integer, der, bytes, parse, oidValue, forge } from '../../extension/crypto/encoding.js';
+import { issue } from './pki.js';
 
 const TST_INFO = '1.2.840.113549.1.9.16.1.4';
 
@@ -10,13 +11,22 @@ const TST_INFO = '1.2.840.113549.1.9.16.1.4';
 // the Kazakhstan OID, which OpenSSL cannot compute) is copied into TSTInfo; OpenSSL
 // signs the token as CAdES with SigningCertificateV2. Its self-signed certificate is
 // trusted only where a test passes `anchor`; the extension trusts bundled NUC roots.
-export function syntheticTsa() {
+// With `issuer` (a tests/helpers/pki.js CA) the TSA certificate is issued by that CA instead, so its
+// path has revocation evidence; the token then carries the CA certificate too.
+export function syntheticTsa({ issuer } = {}) {
   const folder = mkdtempSync(join(tmpdir(), 'ncabrowser-tsa-'));
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(folder, 'key.pem'), '-out', join(folder, 'cert.pem'),
+  let certificate = null;
+  if (issuer) {
+    certificate = issue({ name: 'Tegin synthetic TSA', issuer, eku: ['timeStamping'], ekuCritical: true });
+    writeFileSync(join(folder, 'key.pem'), forge.pki.privateKeyToPem(certificate.privateKey));
+    writeFileSync(join(folder, 'cert.pem'), certificate.pem);
+    writeFileSync(join(folder, 'chain.pem'), issuer.pem);
+  } else execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(folder, 'key.pem'), '-out', join(folder, 'cert.pem'),
     '-days', '2', '-subj', '/CN=Tegin synthetic TSA', '-addext', 'extendedKeyUsage=critical,timeStamping', '-addext', 'keyUsage=critical,digitalSignature'], { stdio: 'ignore' });
   const pem = readFileSync(join(folder, 'cert.pem'), 'utf8');
   let serial = 0;
   return {
+    certificate,
     anchor: new Uint8Array(Buffer.from(pem.replace(/-----[^-]+-----|\s/g, ''), 'base64')),
     reply(query, { time = new Date() } = {}) {
       const fields = parse(new Uint8Array(query)).value;
@@ -27,7 +37,8 @@ export function syntheticTsa() {
         A.create(0, A.Type.GENERALIZEDTIME, false, A.dateToGeneralizedTime(time)), ...(nonce ? [nonce] : []));
       writeFileSync(join(folder, 'tstinfo.der'), Buffer.from(der(info), 'binary'));
       execFileSync('openssl', ['cms', '-sign', '-binary', '-nodetach', '-cades', '-nosmimecap', '-md', 'sha256', '-econtent_type', TST_INFO,
-        '-in', join(folder, 'tstinfo.der'), '-signer', join(folder, 'cert.pem'), '-inkey', join(folder, 'key.pem'), '-outform', 'DER', '-out', join(folder, 'token.der')], { stdio: 'ignore' });
+        '-in', join(folder, 'tstinfo.der'), '-signer', join(folder, 'cert.pem'), '-inkey', join(folder, 'key.pem'), ...(issuer ? ['-certfile', join(folder, 'chain.pem')] : []),
+        '-outform', 'DER', '-out', join(folder, 'token.der')], { stdio: 'ignore' });
       const token = parse(new Uint8Array(readFileSync(join(folder, 'token.der'))));
       return bytes(der(seq(seq(integer(0)), token)));
     },

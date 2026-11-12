@@ -104,13 +104,13 @@ export class RevocationChecker {
       let raw = null;
       try { raw = await this.store.get(url); } catch {}
       if (raw) {
-        try { const crl = await verifyCrl(parseCrl(raw), issuer, { now: this.now(), kind }); this.crls.set(url, { crl }); return crl; }
+        try { const crl = withRaw(await verifyCrl(parseCrl(raw), issuer, { now: this.now(), kind }), raw); this.crls.set(url, { crl }); return crl; }
         catch { await this.store.delete(url).catch(() => {}); }
       }
     }
     try {
       const raw = await fetchBounded(url, { types: CRL_TYPES, ...limitOf(limitName), signal, fetchImpl: this.fetchImpl });
-      const crl = await verifyCrl(parseCrl(raw), issuer, { now: this.now(), kind });
+      const crl = withRaw(await verifyCrl(parseCrl(raw), issuer, { now: this.now(), kind }), raw);
       this.crls.set(url, { crl });
       await this.store.put(url, raw, crl.nextUpdate).catch(() => {});
       return crl;
@@ -129,14 +129,14 @@ export class RevocationChecker {
     return null;
   }
 
-  async viaOcsp(certificate, issuer, profile, signal, errors) {
+  async viaOcsp(certificate, issuer, profile, signal, errors, fresh) {
     for (const url of profile.ocsp) {
       try {
         const request = await buildOcspRequest(certificate, issuer);
         const cached = this.ocspCache.get(request.key);
-        if (cached && cached.expires > this.now()) return cached.result;
+        if (!fresh && cached && cached.expires > this.now()) return cached.result;
         const raw = await fetchBounded(url, { method: 'POST', body: request.body, types: OCSP_TYPES, ...limitOf('ocsp'), signal, fetchImpl: this.fetchImpl });
-        const result = await verifyOcspResponse(raw, request, issuer, { now: this.now() });
+        const result = withEvidence(await verifyOcspResponse(raw, request, issuer, { now: this.now() }), { ocsp: [raw], crls: [] });
         this.ocspCache.set(request.key, { result, expires: result.expires });
         if (this.ocspCache.size > 32) this.ocspCache.delete(this.ocspCache.keys().next().value);
         return result;
@@ -169,7 +169,9 @@ export class RevocationChecker {
       }
     }
     try {
-      return statusFromCrls(selected.full, selected.delta, Uint8Array.from(certificate.serial.value, char => char.charCodeAt(0)), numbering);
+      const result = statusFromCrls(selected.full, selected.delta, Uint8Array.from(certificate.serial.value, char => char.charCodeAt(0)), numbering);
+      const used = result.source === 'crl+delta' ? [selected.full, selected.delta] : [selected.full];
+      return withEvidence(result, { ocsp: [], crls: used.map(item => item.raw) });
     } catch (error) {
       if (error.code === 'ABORTED') throw error;
       errors.push(error.code || 'CRL');
@@ -178,26 +180,33 @@ export class RevocationChecker {
   }
 
   // Checks every certificate of a built path except the trust anchor (the last element).
-  async checkPath(path, { signal } = {}) {
+  // fresh: OCSP is asked again even if a cached answer still applies (evidence after a timestamp).
+  async checkPath(path, { signal, fresh = false } = {}) {
     const checkedAt = new Date(this.now()).toISOString();
     if (!path?.length) return summarize([], checkedAt, 'chain');
-    const certificates = [];
+    const certificates = [], evidence = { ocsp: [], crls: [] };
     for (let index = 0; index < path.length - 1; index++) {
       const certificate = path[index], issuer = path[index + 1];
       const profile = profileFor(await fingerprint(issuer), this.testIssuers);
       const entry = { name: certificate.summary.name, role: index === 0 ? 'end-entity' : 'ca', issuer: issuer.summary.name, required: Boolean(profile) };
       if (!profile) { certificates.push({ ...entry, state: STATES.notChecked, code: 'UNSUPPORTED_CA' }); continue; }
       const errors = [];
-      let result = profile.ocsp.length ? await this.viaOcsp(certificate, issuer, profile, signal, errors) : null;
+      let result = profile.ocsp.length ? await this.viaOcsp(certificate, issuer, profile, signal, errors, fresh) : null;
       if (!result) result = await this.viaCrl(certificate, issuer, profile, signal, errors);
       if (!result) { certificates.push({ ...entry, state: STATES.unavailable, code: errors.at(-1) || 'UNAVAILABLE', errors: [...new Set(errors)] }); continue; }
+      evidence.ocsp.push(...result.evidence.ocsp); evidence.crls.push(...result.evidence.crls);
       const { status, expires, ...details } = result;
       certificates.push({ ...entry, ...details, expires: new Date(expires).toISOString(), state: status === 'good' ? STATES.good : status === 'revoked' ? STATES.revoked : STATES.unknown,
         ...(errors.length ? { errors: [...new Set(errors)] } : {}) });
     }
-    return summarize(certificates, checkedAt);
+    return withEvidence(summarize(certificates, checkedAt), evidence);
   }
 }
+
+// Raw OCSP responses and CRLs behind a result, for embedding as validation data (CAdES-LT). Not
+// enumerable: summaries are posted to pages and stored, the evidence stays in the worker.
+const withRaw = (crl, raw) => Object.defineProperty(crl, 'raw', { value: raw });
+const withEvidence = (result, evidence) => Object.defineProperty(result, 'evidence', { value: evidence });
 
 function limitOf(name) { return { limit: LIMITS[name].bytes, timeout: LIMITS[name].timeout }; }
 

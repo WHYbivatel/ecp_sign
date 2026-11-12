@@ -15,6 +15,7 @@ const hex = value => [...value].map(byte => byte.toString(16).padStart(2, '0')).
 const dateTime = value => new Date(value).toLocaleString('ru-RU');
 const isPdf = data => new TextDecoder('latin1').decode(data.subarray(0, 1024)).includes('%PDF-');
 const FORMAT_HELP = 'Документ будет сохранён вместе с подписью (.p7s).';
+const LONG_TERM_HELP = 'CAdES-LT добавляет к подписи с меткой времени НУЦ цепочки сертификатов и ответы OCSP/CRL, полученные после метки; CAdES-LTA сверху ставит архивную метку времени. Нужен ключ RSA с цепочкой НУЦ РК: для ГОСТ форматы пока не открыты, нет независимого валидатора с казахстанскими OID. Документ остаётся внутри подписи (.p7s).';
 const PADES_HELP = 'Подпись будет встроена в PDF (PAdES-B-B). Tegin сохранит новый файл .signed.pdf. В подписанный PDF подпись добавляется отдельной ревизией, прежние подписи не меняются; зашифрованные и заверенные (DocMDP) PDF не подписываются.';
 
 const REVOCATION_LABELS = { good: 'Не отозван по актуальным данным', revoked: 'Отозван', unknown: 'Статус неизвестен', 'not-checked': 'Не проверялся', unavailable: 'Проверка недоступна' };
@@ -118,7 +119,7 @@ async function showData() {
   $('#operation-details').open = !service && !info;
   $('#operation-details-label').textContent = service || info ? 'Подробности' : 'Просмотр документа';
   if (service) { $('#title').textContent = service.title; $('#subtitle').textContent = 'Проверьте адрес сайта и выберите ключ ЭЦП.'; $('#approve-label').textContent = service.button; }
-  const label = request.format === 'pades' ? 'PAdES-B-B' : request.timestamp ? 'CAdES-T' : request.cades ? 'CAdES-BES' : request.format.toUpperCase();
+  const label = request.format === 'pades' ? 'PAdES-B-B' : request.longTerm ? `CAdES-${request.longTerm.toUpperCase()}` : request.timestamp ? 'CAdES-T' : request.cades ? 'CAdES-BES' : request.format.toUpperCase();
   $('#operation').textContent = service ? 'Подтверждение' : info ? 'Сведения о сертификате' : `${label} · ${request.digested ? 'хеш документа' : request.documents.length + ' док.'}`;
   $('#data-description').textContent = info ? 'Сайт получит публичный сертификат. Закрытый ключ не передаётся.' : request.digested ? 'Сайт передал только хеш. Сам документ недоступен для просмотра. Подтверждая операцию, вы подписываете этот хеш.' : 'Проверьте документ: подпись будет создана для переданных данных.';
   if (service) $('#data-description').textContent = service.description;
@@ -205,7 +206,7 @@ async function localDocument(autoVerify = false) {
     } else {
       const format = $('#format').value;
       const pdf = isPdf(buffer);
-      $('#format-help').textContent = format === 'pades' ? PADES_HELP : pdf ? 'Документ будет сохранён вместе с подписью (.p7s). Для PDF доступна подпись внутри файла: PAdES-B-B в дополнительных настройках.' : FORMAT_HELP;
+      $('#format-help').textContent = format === 'pades' ? PADES_HELP : format.startsWith('cades-lt') ? LONG_TERM_HELP : pdf ? 'Документ будет сохранён вместе с подписью (.p7s). Для PDF доступна подпись внутри файла: PAdES-B-B в дополнительных настройках.' : FORMAT_HELP;
       if (format === 'pades') {
         if (!pdf) throw new Error('PAdES-B-B доступен только для PDF-документов. Выберите PDF или другой формат.');
         const documents = [base64(buffer)];
@@ -219,7 +220,8 @@ async function localDocument(autoVerify = false) {
       }
       request = { operation: 'sign', format: format === 'xml' ? 'xml' : 'cms',
         documents: [format === 'xml' ? new TextDecoder('utf-8', { fatal: true }).decode(buffer) : base64(buffer)],
-        decode: format !== 'xml', encapsulate: !format.endsWith('-detached'), cades: format.startsWith('cades'), timestamp: format === 'cades-t' };
+        decode: format !== 'xml', encapsulate: !format.endsWith('-detached'), cades: format.startsWith('cades'), timestamp: ['cades-t', 'cades-lt', 'cades-lta'].includes(format),
+        ...(format.startsWith('cades-lt') ? { longTerm: format.slice(6) } : {}) };
       await showData();
     }
     if (!verifyMode) report('Документ загружен. Выберите ключ ЭЦП.'); updateControls();
@@ -345,7 +347,7 @@ $('#key-form').addEventListener('submit', async event => {
           const stamp = data.timestamps?.[0];
           const name = (localName || 'document').replace(/[\\/]/g, '_');
           resultScreen({ title: pades ? 'PDF подписан' : 'Документ подписан', description: 'Сохраните результат на своё устройство.',
-            details: `${localName}${pades ? '\nPAdES-B-B · подпись внутри PDF' : ''}\n${certificate.name}\nСтатус отзыва: ${REVOCATION_LABELS[certificate.trust?.revocation?.state || 'not-checked'].toLowerCase()}\n${stamp ? 'Метка НУЦ: ' + new Date(stamp.time).toLocaleString('ru-RU') : 'Подпись создана локально, без метки времени.'}`,
+            details: `${localName}${pades ? '\nPAdES-B-B · подпись внутри PDF' : ''}\n${certificate.name}\nСтатус отзыва: ${REVOCATION_LABELS[certificate.trust?.revocation?.state || 'not-checked'].toLowerCase()}\n${stamp ? 'Метка НУЦ: ' + new Date(stamp.time).toLocaleString('ru-RU') : 'Подпись создана локально, без метки времени.'}${request.longTerm ? `\nCAdES-${request.longTerm.toUpperCase()} · данные OCSP/CRL встроены${data.timestamps.some(item => item.kind === 'archive') ? ', архивная метка проверена' : ''}` : ''}`,
             download: new Blob([value], { type: xml ? 'application/xml' : pades ? 'application/pdf' : 'application/pkcs7-mime' }),
             filename: pades ? name.replace(/\.pdf$/i, '') + '.signed.pdf' : name + (xml ? '.signed.xml' : '.p7s'),
             downloadLabel: pades ? 'Скачать подписанный PDF' : undefined });
@@ -395,7 +397,7 @@ async function verifySelected() {
       const revoked = states.includes('revoked');
       const details = data.signers.map(signer => [signer.name, signer.algorithm, signer.trust.trusted ? 'Цепочка НУЦ РК подтверждена' : 'Цепочка доверия не подтверждена',
         `Статус отзыва сейчас: ${REVOCATION_LABELS[signer.trust.revocation.state].toLowerCase()}`, historyNote(signer.history) || revocationNote(signer.trust.revocation)].filter(Boolean).join('\n')).join('\n\n');
-      const stamps = data.timestamps.map(stamp => `Метка времени: ${dateTime(stamp.time)}\nСертификат службы меток: ${REVOCATION_LABELS[stamp.revocation.state].toLowerCase()}`).join('\n');
+      const stamps = data.timestamps.map(stamp => `${stamp.kind === 'archive' ? 'Архивная метка времени' : 'Метка времени'}: ${dateTime(stamp.time)}\nСертификат службы меток: ${REVOCATION_LABELS[stamp.revocation.state].toLowerCase()}`).join('\n');
       resultScreen({ title: revoked ? 'Подпись соответствует документу' : 'Подпись верна',
         description: revoked ? 'Содержимое соответствует подписи, но сертификат отозван. Сведения о времени отзыва ниже.' : 'Содержимое соответствует криптографической подписи.',
         details: details + (stamps ? '\n\n' + stamps : '') + (states.some(state => state !== 'good' && state !== 'not-checked') ? '\n\nТекущий статус отзыва сам по себе не определяет действительность подписи в прошлом.'

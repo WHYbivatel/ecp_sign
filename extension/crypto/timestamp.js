@@ -3,14 +3,20 @@ import { digestForOid, equalBytes } from './verification.js';
 import { verifyCms, readCms } from './cms-verify.js';
 
 export const TSA_URL = 'http://tsp.pki.gov.kz/';
-export const TSA_POLICY = '1.2.398.3.3.2.6.4';
-export async function makeTimestampRequest(signature) {
-  const hashOid = O.hash512;
-  const imprint = await digestForOid(hashOid, signature);
+// NCA TSA policies (Kalkan KNCAObjectIdentifiers). NCALayer Basics stamps with the GOST 2015
+// policy; Common Utils createCAdESFromBase64 uses the RSA policy with SHA-256, and the NCA answers
+// it with an RSA token from the NCA RSA 2022 chain.
+export const TSA_PROFILES = Object.freeze({
+  gost: Object.freeze({ hashOid: O.hash512, policy: '1.2.398.3.3.2.6.4' }),
+  rsa: Object.freeze({ hashOid: O.sha256, policy: '1.2.398.3.3.2.6.2' })
+});
+export const TSA_POLICY = TSA_PROFILES.gost.policy;
+export async function makeTimestampRequest(data, { hashOid, policy } = TSA_PROFILES.gost) {
+  const imprint = await digestForOid(hashOid, data);
   const nonce = crypto.getRandomValues(new Uint8Array(16)); nonce[0] &= 127; nonce[0] |= 1;
-  const body = bytes(der(seq(integer(1), seq(algorithm(hashOid), octet(imprint)), oid(TSA_POLICY),
+  const body = bytes(der(seq(integer(1), seq(algorithm(hashOid), octet(imprint)), oid(policy),
     A.create(0, A.Type.INTEGER, false, binary(nonce)), A.create(0, A.Type.BOOLEAN, false, '\xff'))));
-  return { body, hashOid, imprint, nonce, policy: TSA_POLICY };
+  return { body, hashOid, imprint, nonce, policy };
 }
 
 export async function verifyTimestampResponse(raw, request, { anchors, now = Date.now(), historical = false } = {}) {
@@ -36,16 +42,19 @@ export async function verifyTimestampResponse(raw, request, { anchors, now = Dat
   return result;
 }
 
-export async function verifyEmbeddedTimestamp(token, signature) {
+// data: the bytes the token must cover (a signature value, or archive time-stamp input).
+export async function verifyEmbeddedTimestamp(token, data, { anchors } = {}) {
   const info = parse(readCms(bytes(der(token))).content).value;
   const hashOid = oidValue(info[2].value[0].value[0]);
+  const profile = Object.values(TSA_PROFILES).find(item => item.policy === oidValue(info[1]) && item.hashOid === hashOid);
+  if (!profile) throw new Error('Метка времени выдана по неизвестной политике или алгоритму.');
   const nonce = info.find((node, index) => index > 4 && node.type === A.Type.INTEGER && node.tagClass === 0);
-  const request = { hashOid, imprint: await digestForOid(hashOid, signature), policy: TSA_POLICY, nonce: nonce ? bytes(nonce.value) : null };
-  return verifyTimestampResponse(bytes(der(seq(seq(integer(0)), token))), request, { historical: true });
+  const request = { hashOid, imprint: await digestForOid(hashOid, data), policy: profile.policy, nonce: nonce ? bytes(nonce.value) : null };
+  return verifyTimestampResponse(bytes(der(seq(seq(integer(0)), token))), request, { anchors, historical: true });
 }
 
-export async function requestTimestamp(signature) {
-  const request = await makeTimestampRequest(signature);
+export async function requestTimestamp(data, profile = TSA_PROFILES.gost) {
+  const request = await makeTimestampRequest(data, profile);
   let response;
   try {
     response = await fetch(TSA_URL, { method: 'POST', headers: { 'Content-Type': 'application/timestamp-query', Accept: 'application/timestamp-reply' },

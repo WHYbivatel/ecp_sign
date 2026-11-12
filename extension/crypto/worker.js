@@ -7,7 +7,8 @@ import { base64, unbase64, utf8 } from './encoding.js';
 import { verifyChain } from './chain.js';
 import { forge, bytes as binaryBytes } from './encoding.js';
 import { verifyCms, describeCms } from './cms-verify.js';
-import { verifyEmbeddedTimestamp } from './timestamp.js';
+import { verifyEmbeddedTimestamp, requestTimestamp, TSA_PROFILES } from './timestamp.js';
+import { signLongTerm, verifyLongTerm, checkLongTermKey, LT_OIDS } from './cades-lt.js';
 import { A, oidValue } from './encoding.js';
 import { RevocationChecker, blocks, summarize, assessHistory, isCurrent, STATES } from './revocation.js';
 import { generateRequest, inspectCertificates, installCertificates, IssuanceError } from './issuance.js';
@@ -26,6 +27,10 @@ let trust, revocationPath, checker;
 function checkConstraints(request) {
   checkSignerConstraints(signer.info, request, trust);
   if (request.format === 'pades') checkPadesKey(signer);
+  if (request.longTerm) {
+    checkLongTermKey(signer);
+    if (!trust.ncaTrusted) throw Object.assign(new Error('CAdES-LT и CAdES-LTA создаются только для сертификата с цепочкой НУЦ РК: для неё известны службы OCSP и CRL.'), { code: 'CADES_LT' });
+  }
 }
 const revocation = () => checker ||= new RevocationChecker();
 const notChecked = reason => summarize([], new Date().toISOString(), reason);
@@ -56,6 +61,17 @@ async function checkStamp(stamp) {
   stamp.revocation = await checkPath(stamp.certificates);
   const failure = revocationFailure(stamp.revocation, 'Сертификат службы меток времени НУЦ');
   if (failure) throw failure;
+}
+// CAdES-LT/LTA embeds the OCSP/CRL evidence itself, so it is obtained after the signature time-stamp
+// and must be good for every certificate of the path.
+async function longTermEvidence(path, role) {
+  const result = await revocation().checkPath(path, { fresh: true });
+  const current = blocks(result) || isCurrent(result) ? result : { ...result, state: STATES.unavailable, reason: 'expired' };
+  const failure = revocationFailure(current, role === 'signer' ? 'Сертификат ключа' : 'Сертификат службы меток времени НУЦ');
+  if (failure) throw failure;
+  if (current.state !== STATES.good || !current.required || !(current.evidence?.ocsp.length || current.evidence?.crls.length)) throw revocationFailure({ state: STATES.notChecked, required: true }, '');
+  if (role === 'signer') trust.revocation = current;
+  return current;
 }
 // Signing many documents and checking TSA chains can outlast OCSP or CRL evidence; it has to
 // apply at the moment the signature leaves the worker.
@@ -118,6 +134,10 @@ self.onmessage = async ({ data }) => {
               revocation: data.checkRevocation ? await revocation().checkPath(verifiedStamp.certificates) : notChecked('not-requested') };
             timestamps.push(stamp);
           }
+          if ((unsigned?.value || []).some(attribute => oidValue(attribute.value[0]) === LT_OIDS.archiveTimestampV3)) {
+            for (const archive of (await verifyLongTerm(raw, { detached: original })).archives) timestamps.push({ kind: 'archive', time: archive.time, authority: archive.authority,
+              revocation: data.checkRevocation ? await revocation().checkPath(archive.certificates) : notChecked('not-requested') });
+          }
           const current = !data.checkRevocation ? notChecked('not-requested') : signer.trust.trusted ? await revocation().checkPath(signer.trust.certificates) : notChecked('untrusted');
           signers.push({ ...signer.certificate.summary, trust: { ...signer.trust, revocation: current }, history: assessHistory(current, stamp) });
         }
@@ -160,6 +180,16 @@ self.onmessage = async ({ data }) => {
             results.push(signedXml);
           }
           else if (request.format === 'pades') results.push(base64(await signPades(signer, bytes)));
+          else if (request.longTerm) {
+            const detached = request.encapsulate ? undefined : bytes;
+            const created = await signLongTerm(signer, bytes, { level: request.longTerm, encapsulate: request.encapsulate, signerPath: revocationPath,
+              evidence: longTermEvidence, requester: data => requestTimestamp(data, TSA_PROFILES.rsa) });
+            await verifyCms(created.cms, { detached });
+            const embedded = await verifyLongTerm(created.cms, { detached });
+            if (embedded.archives.length !== (request.longTerm === 'lta' ? 1 : 0)) throw new Error('Не удалось проверить созданную долгосрочную подпись.');
+            timestamps.push(created.stamp, ...(created.archive ? [Object.assign(created.archive, { kind: 'archive' })] : []));
+            results.push(base64(created.cms));
+          }
           else if (request.format === 'raw') results.push(base64(request.digested ? await signer.signDigest(bytes) : await signer.sign(bytes)));
           else results.push(base64(await signCms(signer, bytes, { encapsulate: request.encapsulate, cades: request.cades, digested: request.digested,
             timestamp: request.timestamp, onTimestamp: stamp => timestamps.push(stamp) })));
@@ -169,7 +199,7 @@ self.onmessage = async ({ data }) => {
       // the stamp would not prove the signing time later (Rules 500/НҚ p.14, p.17).
       for (const stamp of timestamps) await checkStamp(stamp);
       await confirmCurrent(timestamps);
-      self.postMessage({ kind: 'signed', result: results, timestamps: timestamps.map(({ time, authority, revocation }) => ({ time, authority, revocation })) });
+      self.postMessage({ kind: 'signed', result: results, timestamps: timestamps.map(({ time, authority, revocation, kind }) => ({ time, authority, revocation, kind })) });
       signer.destroy(); signer = null;
       self.close();
     }

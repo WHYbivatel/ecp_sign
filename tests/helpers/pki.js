@@ -28,7 +28,7 @@ function bigInteger(value) {
   return A.create(0, A.Type.INTEGER, false, forge.util.hexToBytes(hex));
 }
 
-export function issue({ name, issuer, ca = false, eku, keyUsage, nocheck = false, notBefore = Date.now() - DAY, notAfter = Date.now() + 30 * DAY, unknownCritical = false, serial }) {
+export function issue({ name, issuer, ca = false, eku, ekuCritical = false, keyUsage, nocheck = false, notBefore = Date.now() - DAY, notAfter = Date.now() + 30 * DAY, unknownCritical = false, serial }) {
   const keys = keyPair();
   const certificate = forge.pki.createCertificate();
   certificate.serialNumber = (serial ?? ++serials).toString(16).padStart(4, '0');
@@ -40,7 +40,7 @@ export function issue({ name, issuer, ca = false, eku, keyUsage, nocheck = false
   if (issuer) extensions.push({ name: 'authorityKeyIdentifier', keyIdentifier: issuer.certificate.generateSubjectKeyIdentifier().getBytes() });
   if (ca) extensions.push({ name: 'basicConstraints', cA: true, critical: true }, { name: 'keyUsage', keyCertSign: true, cRLSign: true, critical: true });
   else if (keyUsage !== false) extensions.push({ name: 'keyUsage', digitalSignature: true, critical: true, ...keyUsage });
-  if (eku) extensions.push({ name: 'extKeyUsage', ...Object.fromEntries(eku.map(id => [id, true])) });
+  if (eku) extensions.push({ name: 'extKeyUsage', critical: ekuCritical, ...Object.fromEntries(eku.map(id => [id, true])) });
   if (nocheck) extensions.push({ id: NOCHECK, value: der(A.create(0, A.Type.NULL, false, '')) });
   if (unknownCritical) extensions.push({ id: '1.2.3.4.5.6.7', critical: true, value: der(A.create(0, A.Type.NULL, false, '')) });
   certificate.setExtensions(extensions);

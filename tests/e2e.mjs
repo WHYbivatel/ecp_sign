@@ -7,6 +7,10 @@ import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { rsaFixture, gostFixture, PASSWORD } from './helpers/fixtures.js';
 import { syntheticTsa } from './helpers/tsa.js';
+import { longTermHarness } from './helpers/long-term.js';
+import { signLongTerm } from '../extension/crypto/cades-lt.js';
+import { requestTimestamp, TSA_PROFILES } from '../extension/crypto/timestamp.js';
+import { RevocationChecker, memoryStore } from '../extension/crypto/revocation.js';
 import { verifyCms } from '../extension/crypto/cms-verify.js';
 import { forge, oid, der } from '../extension/crypto/encoding.js';
 import { SignedXml } from 'xml-crypto';
@@ -528,6 +532,30 @@ try {
   await pdfTool.close();
   console.log('PASS: PAdES refuses a non-PDF file and a GOST key with explicit messages');
 
+  // CAdES-LT/LTA: offered locally only; refused before any TSA, OCSP or CRL request for a GOST key and
+  // for an RSA key without the NCA chain. The full flow with a real key stays with the owner.
+  const ltTool = await context.newPage();
+  await ltTool.goto(`chrome-extension://${extensionId}/signing/approve.html`);
+  await ltTool.locator('#advanced-settings summary').click();
+  await ltTool.locator('#format').selectOption('cades-lta');
+  await ltTool.locator('#document').setInputFiles({ name: 'archive.txt', mimeType: 'text/plain', buffer: Buffer.from('Tegin synthetic long-term document') });
+  await ltTool.locator('#format-help').filter({ hasText: 'архивную метку' }).waitFor();
+  assert.match(await ltTool.locator('#operation').textContent(), /CAdES-LTA/);
+  assert.equal(await ltTool.locator('#timestamp-note').isVisible(), true);
+  const ltRequests = [];
+  const countRequest = request => { if (/pki\.gov\.kz|tsp\.|ocsp|\.crl/.test(request.url())) ltRequests.push(request.url()); };
+  context.on('request', countRequest);
+  for (const [name, key, message] of [['gost.p12', gost.container, 'только для ключей RSA с цепочкой НУЦ'], ['rsa.p12', fixture.container, 'с цепочкой НУЦ РК']]) {
+    await ltTool.locator('#key-file').setInputFiles({ name, mimeType: 'application/x-pkcs12', buffer: Buffer.from(key) });
+    await ltTool.locator('#password').fill(PASSWORD); await ltTool.locator('#unlock').click();
+    await ltTool.locator('#status[data-error]').filter({ hasText: message }).waitFor();
+    assert.equal(await ltTool.locator('#approve').isDisabled(), true);
+  }
+  context.off('request', countRequest);
+  assert.deepEqual(ltRequests, []);
+  await ltTool.close();
+  console.log('PASS: CAdES-LTA is offered locally and refused without network for a GOST key and for an RSA key outside the NCA chain');
+
   for (const width of [1280, 870, 400]) {
     await tool.locator('#nav-verify').click(); await tool.setViewportSize({ width, height: 900 });
     await tool.locator('#document').setInputFiles(localPath);
@@ -557,6 +585,22 @@ try {
     await tool.locator('#result-title').filter({ hasText: 'Подпись верна' }).waitFor({ timeout: 60000 });
     assert.match(await tool.locator('#result-details').textContent(), /Сертификат службы меток: не отозван по актуальным данным/);
     console.log('PASS: live NUC OCSP and root CRL from the extension worker: the public TSA certificate chain is not revoked');
+    // Synthetic signer with real NCA RSA time-stamps, built in Node: the archive token chains to the
+    // bundled NCA root, so the extension verifies it offline.
+    const lt = await longTermHarness();
+    const ncaChecker = new RevocationChecker({ store: memoryStore() });
+    try {
+      const { cms } = await signLongTerm(lt.signer, Buffer.from('Tegin synthetic CAdES-LTA for browser verification'), { level: 'lta', signerPath: lt.signerPath,
+        evidence: (path, role) => role === 'timestamp' ? ncaChecker.checkPath(path, { fresh: true }) : lt.evidence(path), requester: value => requestTimestamp(value, TSA_PROFILES.rsa) });
+      writeFileSync(join(folder, 'archive.p7s'), cms);
+    } finally { lt.destroy(); }
+    await tool.locator('#again').click();
+    await tool.locator('#check-revocation').setChecked(false);
+    await tool.locator('#document').setInputFiles(join(folder, 'archive.p7s'));
+    await tool.locator('#verify-submit').click();
+    await tool.locator('#result-title').filter({ hasText: 'Подпись верна' }).waitFor();
+    assert.match(await tool.locator('#result-details').textContent(), /Метка времени: .*\n.*\nАрхивная метка времени: /);
+    console.log('PASS: CAdES-LTA with live NUC RSA time-stamps: the extension verifies the archive-time-stamp-v3 offline and labels it');
   }
   const popupPage = await context.newPage();
   await popupPage.setViewportSize({ width: 400, height: 600 });
