@@ -1,0 +1,80 @@
+name: Scheduled checks
+
+# Weekly: dependencies, the pinned NCA trust material, the signed NCALayer module catalog and the official
+# NCALayer archive. A change fails the run for a manual review; nothing is updated automatically. Live TSA/OCSP/CRL
+# checks reach NCA services and run only on manual dispatch. GitHub runs `schedule` from the default branch only.
+on:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      live:
+        description: 'Also run the live TSA and OCSP/CRL checks against NCA services'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  dependencies:
+    name: dependencies · npm audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=moderate
+      - name: Outdated packages (information only)
+        run: npm outdated || true
+
+  trust:
+    name: NCA certificates and module catalog
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/check-trust.mjs --online
+
+  ncalayer:
+    name: official NCALayer archive · pinned jars
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm ci
+      # Fresh download, no cache: a changed jar in the published archive fails here.
+      - run: node scripts/fetch-kalkan.mjs "$RUNNER_TEMP/kalkan" --xml >> "$GITHUB_ENV"
+      - run: node tests/nursign-xml-crosscheck.mjs
+
+  live:
+    name: live TSA and OCSP/CRL (manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.live
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:tsp
+      - run: npm run test:revocation-live
