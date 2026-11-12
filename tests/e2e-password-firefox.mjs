@@ -1,5 +1,5 @@
 import { arch, platform, tmpdir } from 'node:os';
-import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync, copyFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { resolve, join, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -207,7 +207,9 @@ try {
   if (kalkanJars) {
     for (const [index, [label, name, key]] of keys.entries()) {
       const originalPath = join(folder, `original-${name}`); writeFileSync(originalPath, key);
-      const output = kalkan(['compare', originalPath, downloads[index].path], { TEGIN_TEST_NEW_PASSWORD: NEW_PASSWORD });
+      // Java on Windows reads arguments in the ANSI code page: the Cyrillic download name goes over an ASCII copy.
+      const copyPath = join(folder, `saved-${index}.p12`); copyFileSync(downloads[index].path, copyPath);
+      const output = kalkan(['compare', originalPath, copyPath], { TEGIN_TEST_NEW_PASSWORD: NEW_PASSWORD });
       assert.match(output, /KALKAN SAME KEY AND CERTIFICATES/); assert.match(output, /KALKAN OLD PASSWORD REJECTED/);
       console.log(`PASS: Kalkan opens the Firefox-saved ${label} copy${label.startsWith('GOST') ? ' of a Kalkan-created key' : ''} with the new password: same key and certificates, old password rejected`);
     }
