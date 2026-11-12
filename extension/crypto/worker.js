@@ -140,7 +140,7 @@ self.onmessage = async ({ data }) => {
       const files = await installCertificates(data.certificates.map(unbase64), data.pending, password, issuanceTrust());
       password = '';
       const containers = files.map(file => file.container.buffer);
-      self.postMessage({ kind: 'issue-installed', files: files.map(({ recordId, container, certificate }) => ({ recordId, container: container.buffer, certificate })) }, containers);
+      self.postMessage({ kind: 'issue-installed', files: files.map(({ recordId, slot, container, certificate }) => ({ recordId, slot, container: container.buffer, certificate })) }, containers);
       self.close();
     } else if (data.kind === 'sign') {
       if (!signer) throw new Error('Сначала откройте ключ.');

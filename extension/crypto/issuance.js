@@ -262,17 +262,27 @@ export async function installCertificates(certificates, pending, password, optio
     if (!trust.trusted) fail('CERTIFICATE_UNTRUSTED', `Цепочка до корня НУЦ РК не подтверждена: ${trust.reason}`);
     if (info.keyUsage !== null && !(info.keyUsage & 192)) fail('CERTIFICATE_NO_DIGITAL_SIGNATURE', 'Сертификат не разрешает цифровую подпись.');
     if (info.unknownCritical.length) fail('CERTIFICATE_UNSUPPORTED', 'В сертификате есть неподдерживаемое критическое расширение.');
-    const record = pending.find(entry => entry.id === recordId);
-    const keys = await unsealKeys(record.sealed, password, `${record.id}|${record.identities.join(',')}`);
-    try {
-      let key;
-      for (const candidate of keys) if (await keyIdentity(candidate.spki) === identity) key = candidate;
-      if (!key) fail('CERTIFICATE_KEY_MISMATCH', 'Сертификат не соответствует ключу заявки.');
-      await provePossession(key, info);
-      // The verified intermediate CAs travel with the key; the root stays in the trust store.
-      const intermediates = trust.certificates.slice(1).filter(cert => der(cert.issuer) !== der(cert.subject));
-      files.push({ recordId, identity, container: await buildPkcs12(key, [info, ...intermediates].map(cert => bytes(cert.raw)), password), certificate: info.summary });
-    } finally { keys.forEach(destroyKey); }
+    // A restored backup may sit next to the original record: every record naming this key is tried.
+    const failures = [];
+    let file;
+    for (const record of pending.filter(entry => entry.identities.includes(identity))) {
+      try { file = await installFrom(record, identity, info, trust, password); break; }
+      catch (error) { if (!(error instanceof IssuanceError)) throw error; failures.push(error); }
+    }
+    if (!file) throw failures.find(error => error.code === 'PASSWORD_OR_DAMAGED') || failures.at(-1);
+    files.push(file);
   }
   return files;
+}
+async function installFrom(record, identity, info, trust, password) {
+  const keys = await unsealKeys(record.sealed, password, `${record.id}|${record.identities.join(',')}`);
+  try {
+    let key;
+    for (const candidate of keys) if (await keyIdentity(candidate.spki) === identity) key = candidate;
+    if (!key) fail('CERTIFICATE_KEY_MISMATCH', 'Сертификат не соответствует ключу заявки.');
+    await provePossession(key, info);
+    // The verified intermediate CAs travel with the key; the root stays in the trust store.
+    const intermediates = trust.certificates.slice(1).filter(cert => der(cert.issuer) !== der(cert.subject));
+    return { recordId: record.id, slot: record.slot ?? record.id, identity, container: await buildPkcs12(key, [info, ...intermediates].map(cert => bytes(cert.raw)), password), certificate: info.summary };
+  } finally { keys.forEach(destroyKey); }
 }

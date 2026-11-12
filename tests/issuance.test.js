@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { normalizeIssuance, issuanceOrigin, issuanceResult, issuanceError, isIssuanceRequest, PASSWORD_RULE } from '../extension/signing/issuance-protocol.js';
-import { generateRequest, verifyCsr, inspectCertificates, installCertificates, unsealKeys, keyIdentity, encodeName } from '../extension/crypto/issuance.js';
+import { generateRequest, verifyCsr, inspectCertificates, installCertificates, unsealKeys, sealKeys, keyIdentity, encodeName } from '../extension/crypto/issuance.js';
 import { openContainer } from '../extension/crypto/signer.js';
 import { signCms } from '../extension/crypto/cms.js';
 import { verifyCms } from '../extension/crypto/cms-verify.js';
@@ -258,6 +258,34 @@ test('installation refuses certificates for other keys, untrusted or expired cha
   await reject([good.der, ca.der], 'PASSWORD_OR_DAMAGED', [{ ...record, sealed: foreign.sealed }]);
   const [file] = await installCertificates([good.der, ca.der], [{ id: 'foreign', identities: foreign.identities, sealed: foreign.sealed }, record], PASSWORD, anchors);
   assert.equal(file.recordId, 'mine');
+  assert.equal(file.slot, 'mine');
+});
+
+test('a restored backup next to the original: damaged and mislabelled records are skipped, a foreign key is never installed', async () => {
+  const request = normalizeIssuance(generateCall({ params: [{ algorithm: 'ECGOST3410-2015', length: 256 }] }));
+  const mine = await generateRequest(request, PASSWORD, 'mine');
+  const foreign = await generateRequest(request, PASSWORD, 'foreign');
+  const record = { id: 'mine', slot: 'mine', identities: mine.identities, sealed: mine.sealed };
+  const good = issueFromCsr(ca, pemBody(mine.pems[0]));
+  const reject = async (pending, expected) => assert.rejects(installCertificates([good.der, ca.der], pending, PASSWORD, anchors), error => code(error) === expected);
+
+  // A copy of the same record with damaged ciphertext, stored first under its own slot.
+  const data = unbase64(mine.sealed.data); data[data.length - 1] ^= 1;
+  const damaged = { ...record, slot: 'mine~0badc0de', sealed: { ...mine.sealed, data: Buffer.from(data).toString('base64') } };
+  await reject([damaged], 'PASSWORD_OR_DAMAGED');
+  const [restored] = await installCertificates([good.der, ca.der], [damaged, record], PASSWORD, anchors);
+  assert.equal(restored.slot, 'mine');
+
+  // A correctly sealed record that names this certificate's key but holds another key.
+  const keys = await unsealKeys(foreign.sealed, PASSWORD, `foreign|${foreign.identities.join(',')}`);
+  const forged = { id: 'forged', slot: 'forged', identities: mine.identities, sealed: await sealKeys(keys, PASSWORD, `forged|${mine.identities.join(',')}`) };
+  await reject([forged], 'CERTIFICATE_KEY_MISMATCH');
+  const [chosen] = await installCertificates([good.der, ca.der], [forged, record], PASSWORD, anchors);
+  assert.equal(chosen.slot, 'mine');
+  const signer = await openContainer(chosen.container.slice(), PASSWORD);
+  try { assert.equal(signer.info.raw, binary(good.der)); } finally { signer.destroy(); }
+  // With a wrong password the user is told to retry it, not that the key is foreign.
+  await assert.rejects(installCertificates([good.der, ca.der], [forged, record], 'Wrong-Pass-2026', anchors), error => code(error) === 'PASSWORD_OR_DAMAGED');
 });
 
 test('sealed application keys round-trip and are bound to their record', async () => {

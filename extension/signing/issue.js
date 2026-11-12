@@ -49,8 +49,9 @@ function run(payload) {
 
 const validRecord = value => value && value.v === 1 && /^[0-9a-f-]{36}$/.test(value.id) && Array.isArray(value.identities) && value.identities.length >= 1 && value.identities.length <= 4 &&
   value.identities.every(item => typeof item === 'string' && /^[0-9a-f]{64}$/.test(item)) && value.sealed && typeof value.sealed === 'object' && typeof value.sealed.data === 'string';
+// The storage slot is the record id, or id~hash for a differing backup of the same application.
 async function records() {
-  return Object.entries(await api.storage.local.get(null)).filter(([key, value]) => key.startsWith(STORE) && validRecord(value)).map(([, value]) => value);
+  return Object.entries(await api.storage.local.get(null)).filter(([key, value]) => key.startsWith(STORE) && validRecord(value)).map(([key, value]) => ({ ...value, slot: key.slice(STORE.length) }));
 }
 
 function download(blob, filename, label) {
@@ -157,11 +158,11 @@ async function install() {
   busy = true; updateControls(); report('Проверяем сертификат и ключ…');
   try {
     await message('nca:validate');
-    const pending = (await records()).map(({ id: recordId, identities, sealed }) => ({ id: recordId, identities, sealed }));
+    const pending = (await records()).map(({ id: recordId, slot, identities, sealed }) => ({ id: recordId, slot, identities, sealed }));
     const { files } = await run({ kind: 'issue-install', certificates: request.certificates, pending, password });
     clearPassword();
     busy = false; finished = true;
-    installed = files.map(file => file.recordId);
+    installed = files.map(file => file.slot);
     resultScreen('Сертификат готов к сохранению', 'Сохраните файл ЭЦП. После этого сайт НУЦ получит отметку об установке.',
       files.map(file => `${file.certificate.name} · ${file.certificate.algorithm}\nДействует до ${new Date(file.certificate.notAfter).toLocaleDateString('ru-RU')}`).join('\n\n') +
       '\n\nПароль файла .p12 — тот, что вы задали при создании ключа.');
@@ -184,8 +185,8 @@ let confirmed = false;
 async function confirmInstalled() {
   if (confirmed) return;
   confirmed = true;
-  for (const recordId of installed) {
-    const key = STORE + recordId, record = (await api.storage.local.get(key))[key];
+  for (const slot of installed) {
+    const key = STORE + slot, record = (await api.storage.local.get(key))[key];
     if (record) await api.storage.local.set({ [key]: { ...record, status: 'installed', installed: new Date().toISOString() } });
   }
   $('#forget').hidden = false;
@@ -208,14 +209,21 @@ $('#backup-file').addEventListener('change', async () => {
     try { record = JSON.parse(await file.text()); } catch { throw new Error('Это не резервная копия ключа заявки Tegin.'); }
     if (!validRecord(record)) throw new Error('Это не резервная копия ключа заявки Tegin.');
     const { v, id: recordId, origin: source, created, holder, algorithms, identities, sealed } = record;
-    await api.storage.local.set({ [STORE + recordId]: { v, id: recordId, origin: source, created, holder, algorithms, identities, status: 'requested', sealed } });
-    report('Резервная копия добавлена.');
+    // A backup never replaces a stored key: a damaged copy must not overwrite the working one.
+    const same = (await records()).filter(stored => stored.id === recordId);
+    if (same.some(stored => stored.sealed.data === sealed.data)) report('Эта резервная копия уже есть в браузере.');
+    else {
+      const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sealed.data)));
+      const slot = same.length ? `${recordId}~${[...digest.slice(0, 4)].map(byte => byte.toString(16).padStart(2, '0')).join('')}` : recordId;
+      await api.storage.local.set({ [STORE + slot]: { v, id: recordId, origin: source, created, holder, algorithms, identities, status: 'requested', sealed } });
+      report('Резервная копия добавлена.');
+    }
     await inspect();
   } catch (error) { report(error.message, true); }
 });
 $('#forget').addEventListener('click', async () => {
   if (!confirm('Удалить ключ заявки из браузера? Восстановить его можно будет только из сохранённого файла .p12 или резервной копии.')) return;
-  await api.storage.local.remove(installed.map(recordId => STORE + recordId));
+  await api.storage.local.remove(installed.map(slot => STORE + slot));
   $('#forget').hidden = true;
 });
 $('#password-form').addEventListener('submit', event => { event.preventDefault(); if (!$('#approve').disabled) $('#approve').click(); });

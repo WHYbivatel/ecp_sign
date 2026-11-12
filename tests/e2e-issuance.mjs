@@ -1,14 +1,15 @@
 import { chromium } from 'playwright';
 import { createServer } from 'node:http';
-import { mkdtempSync, rmSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve, join } from 'node:path';
+import { resolve, join, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { gostHierarchy, issueFromCsr } from './helpers/gost-ca.js';
 import { unbase64, parse, der, oidValue } from '../extension/crypto/encoding.js';
 import { verifyCms } from '../extension/crypto/cms-verify.js';
-import { generateRequest } from '../extension/crypto/issuance.js';
+import { generateRequest, unsealKeys, sealKeys } from '../extension/crypto/issuance.js';
+import { openContainer } from '../extension/crypto/signer.js';
 import { normalizeIssuance } from '../extension/signing/issuance-protocol.js';
 
 // NUC key issuance in the built extension against anonymized replicas of the portal pages.
@@ -33,8 +34,8 @@ mkdirSync(resolve('artifacts'), { recursive: true });
 
 let context, sw, extensionId;
 const errors = [], escaped = [];
-async function launch() {
-  context = await chromium.launchPersistentContext(join(folder, 'profile'), {
+async function launch(profile = 'profile') {
+  context = await chromium.launchPersistentContext(join(folder, profile), {
     executablePath: process.env.CHROMIUM_EXECUTABLE || chromium.executablePath(), headless: true, viewport: { width: 870, height: 900 }, acceptDownloads: true,
     args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`, '--no-first-run', `--host-resolver-rules=${NUC_HOSTS.map(host => `MAP ${host} ~NOTFOUND`).join(', ')}`]
   });
@@ -283,6 +284,71 @@ try {
   assert.equal(Buffer.from(verified.content).toString(), 'Тестовый документ после выпуска ЭЦП');
   assert.equal(verified.signers[0].certificate.raw, der(parse(leaf.der)));
   console.log('PASS: the issued .p12 opens in Tegin and signs a CMS document that verifies to the synthetic NUC root');
+
+  // Independent check with the official Kalkan provider when its jars are available.
+  if (process.env.NCA_KALKAN_JARS) {
+    const classes = join(folder, 'kalkan'); mkdirSync(classes);
+    const classpath = `${process.env.NCA_KALKAN_JARS}${delimiter}${classes}`;
+    execFileSync(process.env.NCA_JAVAC || 'javac', ['-cp', process.env.NCA_KALKAN_JARS, '-d', classes, resolve('tests/interop/Pkcs12Interop.java'), resolve('tests/interop/Verify.java')], { stdio: 'pipe' });
+    const kalkan = (...args) => execFileSync(process.env.NCA_JAVA || 'java', ['-cp', classpath, ...args], { encoding: 'utf8', stdio: 'pipe', env: { ...process.env, TEGIN_TEST_P12_PASSWORD: PASSWORD } });
+    assert.match(kalkan('Pkcs12Interop', 'open', p12Path), /KALKAN OPEN OK/);
+    const cmsPath = join(folder, 'signed.cms'); writeFileSync(cmsPath, unbase64(signed.body.result[0]));
+    assert.match(kalkan('Verify', 'cms', cmsPath), /KALKAN CMS VALID/);
+    const changed = unbase64(signed.body.result[0]); const at = Buffer.from(changed).indexOf(Buffer.from('Тестовый документ после выпуска ЭЦП')); changed[at] ^= 1;
+    writeFileSync(cmsPath, changed);
+    assert.throws(() => kalkan('Verify', 'cms', cmsPath));
+    console.log('PASS: Kalkan opens the browser-saved .p12 and verifies the CMS it signed; a changed document is rejected');
+  } else console.log('SKIP: Kalkan check of the browser-saved .p12 (set NCA_KALKAN_JARS)');
+
+  // Recovery in a browser without the key (cleared data or another computer): only the backup file.
+  await context.close();
+  await launch('profile-restored');
+  assert.deepEqual(await records(), []);
+  const backup = JSON.parse(readFileSync(backupPath, 'utf8'));
+  const foreignKeys = await unsealKeys(foreignRequest.sealed, PASSWORD, `foreign|${foreignRequest.identities.join(',')}`);
+  const forgedId = '00000000-0000-4000-8000-000000000001';
+  // A correctly sealed record that claims the issued key but holds another one.
+  const forged = { ...backup, id: forgedId, sealed: await sealKeys(foreignKeys, PASSWORD, `${forgedId}|${backup.identities.join(',')}`) };
+  const damagedData = Buffer.from(backup.sealed.data, 'base64'); damagedData[damagedData.length - 1] ^= 1;
+  const damaged = { ...backup, sealed: { ...backup.sealed, data: damagedData.toString('base64') } };
+  const backupFile = (name, value) => { const path = join(folder, name); writeFileSync(path, JSON.stringify(value)); return path; };
+  issued = [leaf.pem, ca.pem];
+  status = await context.newPage();
+  await status.goto(STATUS);
+  popup = await startPopup(status, 'setX509CertToKeystore');
+  await popup.locator('.issue-certificate').waitFor();
+  assert.match(await popup.locator('#certificates').innerText(), /Ключ для этого сертификата в этом браузере не найден/);
+  const restore = async (path, message) => {
+    await popup.locator('#backup-file').setInputFiles(path);
+    await popup.locator('#status').filter({ hasText: message }).waitFor();
+  };
+  await restore(backupFile('not-a-backup.json', { v: 1 }), 'Это не резервная копия ключа заявки Tegin.');
+  await restore(backupFile('forged.json', forged), 'Резервная копия добавлена.');
+  await popup.locator('#certificates').filter({ hasText: 'Ключ заявки найден в этом браузере' }).waitFor();
+  await popup.locator('#password').fill(PASSWORD);
+  await popup.locator('#approve').click();
+  await popup.locator('#status[data-error]').filter({ hasText: 'Сертификат не соответствует ключу заявки.' }).waitFor();
+  assert.equal(await status.evaluate(() => window.statusChanged || false), false);
+  // A damaged copy of the real backup is stored first; the intact copy must not be replaced by it, nor replace it.
+  await restore(backupFile('damaged.json', damaged), 'Резервная копия добавлена.');
+  await restore(backupPath, 'Резервная копия добавлена.');
+  await restore(backupPath, 'Эта резервная копия уже есть в браузере.');
+  const slots = Object.keys(await sw.evaluate(() => chrome.storage.local.get(null))).filter(key => key.startsWith('issuance:')).sort();
+  assert.deepEqual(slots.map(key => key.replace(/~[0-9a-f]{8}$/, '~hash')), [`issuance:${forgedId}`, `issuance:${backup.id}`, `issuance:${backup.id}~hash`].sort());
+  await popup.locator('#password').fill(PASSWORD);
+  await popup.locator('#approve').click();
+  await popup.locator('#result-screen:not([hidden])').waitFor();
+  const restoredDownload = popup.waitForEvent('download');
+  await popup.locator('#downloads a').click();
+  const restoredPath = join(folder, 'restored.p12'); await (await restoredDownload).saveAs(restoredPath);
+  assert.deepEqual(await answer(status), { status: true, body: { result: true } });
+  const restoredSigner = await openContainer(new Uint8Array(readFileSync(restoredPath)), PASSWORD);
+  try { assert.equal(restoredSigner.info.raw, der(parse(leaf.der))); } finally { restoredSigner.destroy(); }
+  const marked = (await records()).filter(record => record.status === 'installed');
+  assert.equal(marked.length, 1);
+  assert.equal(marked[0].id, backup.id);
+  await popup.close(); await status.close();
+  console.log('PASS: in a browser without the key, the backup restores installation; a forged record is refused as another key, a damaged copy neither replaces nor blocks the intact one');
 
   assert.deepEqual(escaped, []);
   assert.deepEqual(errors, []);
