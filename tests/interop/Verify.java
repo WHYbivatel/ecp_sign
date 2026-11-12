@@ -36,6 +36,21 @@ public class Verify {
     }
    }
    System.out.println("KALKAN CMS VALID");
+  } else if (args[0].equals("xml-each")) {
+   // Every ds:Signature on its own, references by Id resolved: the result for each co-signature.
+   KncaXS.loadXMLSecurity();
+   DocumentBuilderFactory f=DocumentBuilderFactory.newInstance();f.setNamespaceAware(true);
+   f.setFeature("http://apache.org/xml/features/disallow-doctype-decl",true);
+   Document d=f.newDocumentBuilder().parse(new File(args[1]));
+   NodeList all=d.getElementsByTagName("*");
+   for(int i=0;i<all.getLength();i++){Element el=(Element)all.item(i); if(el.hasAttribute("Id")) el.setIdAttribute("Id",true);}
+   NodeList signatures=d.getElementsByTagNameNS("http://www.w3.org/2000/09/xmldsig#","Signature");
+   for(int i=0;i<signatures.getLength();i++){
+    XMLSignature signature=new XMLSignature((Element)signatures.item(i),"");
+    boolean valid;
+    try { valid=signature.checkSignatureValue(signature.getKeyInfo().getX509Certificate()); } catch(Exception ex) { valid=false; }
+    System.out.println("KALKAN XML SIGNATURE "+i+" "+(valid?"VALID":"INVALID"));
+   }
   } else {
    KncaXS.loadXMLSecurity();
    DocumentBuilderFactory f=DocumentBuilderFactory.newInstance();f.setNamespaceAware(true);

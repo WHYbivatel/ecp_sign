@@ -2,6 +2,8 @@ import { adaptRequest, adapterResponse } from '../modules/adapters.js';
 const COMMON = 'kz.gov.pki.knca.commonUtils';
 const BASICS = 'kz.gov.pki.knca.basics';
 export const MAX_MESSAGE_LENGTH = 3 * 1024 * 1024;
+// Same limit as crypto/xml.js, which the background bundle does not import.
+const MAX_XPATH_LENGTH = 512;
 const unsupported = message => { throw new Error(message || 'Этот метод NCALayer пока не поддерживается.'); };
 function signerConstraints(value = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !['extKeyUsageOids', 'iin', 'bin', 'serialNumber', 'chain'].includes(key))) unsupported('Условия выбора сертификата не поддерживаются.');
@@ -18,7 +20,12 @@ export function normalizeRequest(input) {
   const adapted = adaptRequest(input);
   if (adapted) {
     // Third-party modules keep their own keyType mapping; the NCALayer key type rule is Common Utils' own.
-    if (adapted.commonInput) return { ...normalizeRequest(adapted.commonInput), moduleId: adapted.moduleId, signerParams: adapted.constraints || {} };
+    if (adapted.commonInput) {
+      const normalized = normalizeRequest(adapted.commonInput);
+      // The XPath semantics of third-party plugins are not known; only Common Utils' own profile is implemented.
+      if (normalized.xpath) unsupported('Этот модуль поддерживает только подпись целого XML, без XPath.');
+      return { ...normalized, moduleId: adapted.moduleId, signerParams: adapted.constraints || {} };
+    }
     if (adapted.moduleId === 'qiwi') adapted.callId = input.args[0];
     return adapted;
   }
@@ -32,8 +39,12 @@ export function normalizeRequest(input) {
     if (method === 'getKeyInfo') return { operation: 'info', documents: [], format: 'info', signerParams };
     if (method === 'signXml' || method === 'signXmls') {
       const documents = method === 'signXmls' ? args[2] : [args[2]];
-      if (!Array.isArray(documents) || !documents.length || documents.length > 10 || documents.some(doc => typeof doc !== 'string') || args[3] || args[4]) unsupported('Поддерживается подпись целого XML без XPath, до 10 документов.');
-      return { operation: 'sign', format: 'xml', documents, decode: false, multiple: method === 'signXmls', signerParams };
+      if (!Array.isArray(documents) || !documents.length || documents.length > 10 || documents.some(doc => typeof doc !== 'string')) unsupported('Поддерживается подпись до 10 XML-документов.');
+      const [tbsXPath, parentXPath] = [args[3] ?? '', args[4] ?? ''];
+      if ([tbsXPath, parentXPath].some(value => typeof value !== 'string' || value.length > MAX_XPATH_LENGTH)) unsupported(`XPath должен быть строкой до ${MAX_XPATH_LENGTH} символов.`);
+      // Without tbsElementXPath NCALayer signs the whole document and ignores the parent XPath.
+      const xpath = tbsXPath ? { tbsXPath, parentXPath } : undefined;
+      return { operation: 'sign', format: 'xml', documents, decode: false, multiple: method === 'signXmls', signerParams, ...(xpath && { xpath }) };
     }
     if (['createCMSSignatureFromBase64', 'createCAdESFromBase64', 'createCAdESFromBase64Hash'].includes(method)) {
       const digested = method === 'createCAdESFromBase64Hash';

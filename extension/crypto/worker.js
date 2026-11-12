@@ -154,8 +154,9 @@ self.onmessage = async ({ data }) => {
         const bytes = request.decode ? unbase64(doc) : utf8(doc);
         try {
           if (request.format === 'xml') {
-            const signedXml = await signXml(signer, new TextDecoder('utf-8', { fatal: true }).decode(bytes));
-            if (request.moduleId === 'qiwi' && !await verifyCreatedXml(signer, signedXml)) throw new Error('Не удалось проверить созданную XML-подпись.');
+            const original = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+            const signedXml = await signXml(signer, original, request.xpath);
+            if (!await verifyCreatedXml(signer, signedXml, { original, ...request.xpath })) throw new Error('Не удалось проверить созданную XML-подпись.');
             results.push(signedXml);
           }
           else if (request.format === 'pades') results.push(base64(await signPades(signer, bytes)));

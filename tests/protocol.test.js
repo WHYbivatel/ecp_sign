@@ -6,7 +6,10 @@ const basics = 'kz.gov.pki.knca.basics';
 test('normalizes commonUtils and basics without silently dropping unsupported requirements', () => {
   assert.deepEqual(normalizeRequest({ module: common, method: 'getActiveTokens' }).value, []);
   assert.equal(normalizeRequest({ module: common, method: 'signXml', args: ['PKCS12', 'SIGNATURE', '<x/>', '', ''] }).format, 'xml');
-  assert.throws(() => normalizeRequest({ module: common, method: 'signXml', args: ['PKCS12', 'SIGNATURE', '<x/>', '//x', ''] }), /XPath/);
+  assert.equal(normalizeRequest({ module: common, method: 'signXml', args: ['PKCS12', 'SIGNATURE', '<x/>', '', '//ignored'] }).xpath, undefined);
+  assert.deepEqual(normalizeRequest({ module: common, method: 'signXmls', args: ['PKCS12', 'SIGNATURE', ['<x/>'], '//x', '//y'] }).xpath, { tbsXPath: '//x', parentXPath: '//y' });
+  for (const value of [{}, 7, 'x'.repeat(513)]) assert.throws(() => normalizeRequest({ module: common, method: 'signXml', args: ['PKCS12', 'SIGNATURE', '<x/>', value, ''] }), /XPath/);
+  assert.throws(() => normalizeRequest({ module: 'kz.uchet.signUtil.commonUtils', method: 'signXml', args: ['PKCS12', 'SIGNATURE', '<x/>', '//x', '//y'] }), /без XPath/);
   const request = { module: basics, method: 'sign', args: { format: 'cms', allowedStorages: ['PKCS12'], data: 'dGVzdA==', signingParams: { decode: true, encapsulate: false } } };
   assert.equal(normalizeRequest(request).decode, true);
   for (const signingParams of [{ tsaProfile: { url: 'https://other.test' } }, { digested: true }, { unexpected: true }]) {

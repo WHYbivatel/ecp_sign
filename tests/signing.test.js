@@ -74,6 +74,6 @@ test('wrong passwords, expired certificates, hostile XML and co-signing fail exp
   await assert.rejects(signXml(signer, '<!DOCTYPE x [<!ENTITY x SYSTEM "file:///etc/passwd">]><x>&x;</x>'), /DTD/);
   await assert.rejects(signXml(signer, '<x><broken></x>'), /XML/);
   const signed = await signXml(signer, '<x/>');
-  await assert.rejects(signXml(signer, signed), /Доподписание/);
+  await assert.rejects(signXml(signer, signed), /нарушила бы прежнюю подпись/);
   signer.destroy();
 });

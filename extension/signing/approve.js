@@ -122,6 +122,7 @@ async function showData() {
   $('#operation').textContent = service ? 'Подтверждение' : info ? 'Сведения о сертификате' : `${label} · ${request.digested ? 'хеш документа' : request.documents.length + ' док.'}`;
   $('#data-description').textContent = info ? 'Сайт получит публичный сертификат. Закрытый ключ не передаётся.' : request.digested ? 'Сайт передал только хеш. Сам документ недоступен для просмотра. Подтверждая операцию, вы подписываете этот хеш.' : 'Проверьте документ: подпись будет создана для переданных данных.';
   if (service) $('#data-description').textContent = service.description;
+  if (request.xpath) $('#data-description').textContent = `Подписывается не весь XML, а только элемент по пути ${request.xpath.tbsXPath} (с его содержимым). Подпись будет добавлена в элемент ${request.xpath.parentXPath || '(не указан)'}. Остальные части документа подписью не защищены.`;
   if (request.format === 'pades') $('#data-description').textContent = `Подпись будет встроена в PDF (${request.pages} стр.). Tegin сохранит новый файл с подписью, исходный файл не изменится.`;
   $('#footer-note').lastChild.textContent = request.digested ? 'Подтверждение подписи хеша' : 'Подпись только с вашего согласия';
   if (info) { $('#preview').textContent = 'Для этой операции документ не требуется.'; $('#source').textContent = 'Публичные сведения о выбранном сертификате.'; return; }

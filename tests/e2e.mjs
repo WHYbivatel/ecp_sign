@@ -242,6 +242,25 @@ try {
   assert.match(answer.body.result[0], /ds:SignatureValue/);
   console.log('PASS: basics.sign XML returned through the page bridge');
 
+  // Common Utils signXml with tbsElementXPath/signatureParentElementXPath, then a co-signature by another key.
+  const xpathXml = '<root><data Id="d1"><item>Подпись элемента</item></data><signatures/></root>';
+  const xpathRequest = xml => ({ module: 'kz.gov.pki.knca.commonUtils', method: 'signXml', args: ['PKCS12', 'SIGNATURE', xml, '//data', '//signatures'] });
+  popup = await confirmation(xpathRequest(xpathXml));
+  assert.match(await popup.locator('#data-description').textContent(), /только элемент по пути \/\/data.*в элемент \/\/signatures/);
+  await popup.locator('#approve').click();
+  answer = await result();
+  assert.equal(answer.code, '200');
+  const firstXml = answer.responseObject;
+  assert.match(firstXml, /<signatures><ds:Signature[^>]*>.*<ds:Reference URI="#d1">.*<\/ds:Signature><\/signatures><\/root>$/s);
+  popup = await confirmation(xpathRequest(firstXml), gost);
+  await popup.locator('#approve').click();
+  answer = await result();
+  assert.equal(answer.code, '200');
+  const firstSignature = firstXml.match(/<ds:Signature[\s\S]*?<\/ds:Signature>/)[0];
+  assert.equal(answer.responseObject.match(/<ds:Signature[\s\S]*?<\/ds:Signature>/g).length, 2);
+  assert.ok(answer.responseObject.includes(firstSignature), 'first signature changed by the co-signature');
+  console.log('PASS: Common Utils signXml by XPath: element and parent shown before approval, signature placed in the parent; a GOST co-signature keeps the first byte-identical');
+
   // Reproduce the public NUC login request: send immediately on open,
   // null TSA profile, twelve acceptable certificates including a legacy OID.
   const authentication = rsaFixture({ purpose: 'clientAuth' });

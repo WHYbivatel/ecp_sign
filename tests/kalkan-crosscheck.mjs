@@ -49,6 +49,23 @@ try {
       const output = execFileSync(java, ['-cp', `${jars}${delimiter}${folder}`, 'Verify', 'xml', path], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
       if (!output.includes('KALKAN XML VALID')) throw new Error(`${family} XML failed`);
       console.log(`PASS Kalkan ${family} XMLDSig`);
+      // XPath (Common Utils 0.3.4 profile) and co-signing: Kalkan checks every signature on its own.
+      const each = xml => {
+        writeFileSync(path, xml);
+        return execFileSync(java, ['-cp', `${jars}${delimiter}${folder}`, 'Verify', 'xml-each', path], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+          .split('\n').filter(line => line.startsWith('KALKAN XML SIGNATURE')).map(line => line.split(' ').pop());
+      };
+      const reference = JSON.parse(readFileSync(resolve('tests/fixtures/ncalayer-xml-reference.json'), 'utf8'));
+      const xpath = { tbsXPath: reference.tbsElementXPath, parentXPath: reference.signatureParentElementXPath };
+      const expect = (actual, expected, what) => { if (actual.join() !== expected.join()) throw new Error(`${family} ${what}: ${actual.join()}`); };
+      const once = await signXml(signer, reference.input, xpath);
+      expect(each(once), ['VALID'], 'XPath signature');
+      const twice = await signXml(signer, once, xpath);
+      expect(each(twice), ['VALID', 'VALID'], 'XPath co-signature');
+      expect(each(twice.replace('Привет', 'Пока')), ['INVALID', 'INVALID'], 'changed element');
+      expect(each(await signXml(signer, reference.cosigned, xpath)), ['VALID', 'VALID', 'VALID'], 'co-signature of the NCALayer reference');
+      expect(each(await signXml(signer, once)), ['VALID', 'VALID'], 'whole-document signature after an element signature');
+      console.log(`PASS Kalkan ${family} XPath signature and co-signatures (own, after NCALayer's two, whole document after element); changed element rejected for all`);
       for (const name of ['egov-login', 'egov-service-sign', 'nuc-cabinet-login']) {
         const xml = JSON.parse(readFileSync(resolve(`tests/fixtures/portals/${name}.json`), 'utf8')).request.args.data;
         const signed = await signXml(signer, xml);
