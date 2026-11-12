@@ -14,11 +14,7 @@
     "test:revocation-live": "node tests/revocation-live.mjs"
   },
   "dependencies": {
-    "@signpdf/placeholder-pdf-lib": "4.0.0",
-    "@signpdf/signpdf": "4.0.0",
-    "@signpdf/utils": "4.0.0",
     "@xmldom/xmldom": "^0.9.12",
-    "buffer": "6.0.3",
     "node-forge": "^1.4.3",
     "pdf-lib": "1.17.1",
     "xml-crypto": "^6.4.0"

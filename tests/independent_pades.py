@@ -48,6 +48,7 @@ def validate(path, cert_path):
             ades = asyncio.run(ades_basic_validation(embedded.signed_data, spec, raw_digest=embedded.compute_digest()))
             attributes = sorted(attribute['type'].dotted for attribute in embedded.signer_info['signed_attrs'])
             result['signatures'].append({
+                'fieldName': embedded.field_name,
                 'subFilter': str(embedded.sig_object['/SubFilter']),
                 'intact': status.intact, 'valid': status.valid, 'trusted': status.trusted,
                 'coverage': status.coverage.name if status.coverage else None,

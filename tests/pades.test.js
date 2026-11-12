@@ -98,7 +98,7 @@ test('PAdES keeps existing form fields and accepts object streams', async () => 
     const field = doc.getForm().createTextField('customer');
     field.setText('Synthetic value'); field.addToPage(doc.getPage(0), { x: 50, y: 700, width: 200, height: 20 });
   }, { objectStreams: true });
-  assert.deepEqual(await inspectPdf(pdf), { pages: 2 });
+  assert.deepEqual(await inspectPdf(pdf), { pages: 2, signatures: 0 });
   const signed = await signPades(signer, pdf);
   const doc = await PDFDocument.load(signed);
   assert.equal(doc.getForm().getTextField('customer').getText(), 'Synthetic value');
@@ -106,7 +106,7 @@ test('PAdES keeps existing form fields and accepts object streams', async () => 
   await verifyCms(new Uint8Array(cms), { detached: new Uint8Array(covered) });
 });
 
-test('PAdES refuses unsupported, encrypted and already signed PDFs without touching them', async () => {
+test('PAdES refuses unsupported, encrypted and certified PDFs without touching them', async () => {
   await refusal(inspectPdf(new TextEncoder().encode('plain text, not a PDF')), 'PDF_NOTPDF');
   await refusal(inspectPdf(new TextEncoder().encode('%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 9 0 R >>\nendobj\n1 0 obj << /broken')), 'PDF_BROKEN');
 
@@ -115,14 +115,9 @@ test('PAdES refuses unsupported, encrypted and already signed PDFs without touch
   await refusal(inspectPdf(encrypted), 'PDF_ENCRYPTED');
   await refusal(signPades(signer, encrypted), 'PDF_ENCRYPTED');
 
-  const signed = await signPades(signer, await syntheticPdf());
-  const before = signed.slice();
-  await refusal(inspectPdf(signed), 'PDF_SIGNED');
-  await refusal(signPades(signer, signed), 'PDF_SIGNED');
-  assert.deepEqual(signed, before, 'existing signature is not modified');
-
   const certified = await syntheticPdf(doc => doc.catalog.set(PDFName.of('Perms'), doc.context.obj({ DocMDP: doc.context.obj({}) })));
-  await refusal(inspectPdf(certified), 'PDF_SIGNED');
+  await refusal(inspectPdf(certified), 'PDF_CERTIFIED');
+  await refusal(signPades(signer, certified), 'PDF_CERTIFIED');
 
   const withField = await syntheticPdf(doc => {
     const field = doc.context.register(doc.context.obj({ FT: 'Sig', T: PDFString.of('Approval') }));
@@ -164,13 +159,91 @@ test('PAdES finds signature fields with an indirect or inherited /FT and keeps t
   });
   await refusal(inspectPdf(cyclic), 'PDF_BROKEN');
 
-  assert.deepEqual(await inspectPdf(await inheritedField('Tx')), { pages: 2 });
+  assert.deepEqual(await inspectPdf(await inheritedField('Tx')), { pages: 2, signatures: 0 });
   const text = await syntheticPdf(async doc => {
     const field = doc.getForm().createTextField('reference');
     field.setText('Synthetic 42'); field.addToPage(doc.getPage(1), { x: 50, y: 700, width: 200, height: 20 });
   });
   const signed = await signPades(signer, text);
   assert.equal((await PDFDocument.load(signed)).getForm().getTextField('reference').getText(), 'Synthetic 42');
+});
+
+function allParts(pdf) {
+  const text = Buffer.from(pdf).toString('latin1');
+  return [...text.matchAll(/\/ByteRange \[(\d+) (\d+) (\d+) (\d+) *\]/g)].map(match => {
+    const [start, first, second, rest] = match.slice(1).map(Number);
+    const covered = Buffer.concat([Buffer.from(pdf.subarray(start, first)), Buffer.from(pdf.subarray(second, second + rest))]);
+    return { range: [start, first, second, rest], covered, cms: trimDer(Buffer.from(text.slice(first + 1, second - 1), 'hex')) };
+  });
+}
+const fieldNamesOf = async pdf => (await PDFDocument.load(pdf)).getForm().getFields().map(field => field.getName()).sort();
+
+for (const objectStreams of [false, true]) test(`PAdES appends a second signature as an incremental update (${objectStreams ? 'xref stream' : 'xref table'})`, async () => {
+  const original = await syntheticPdf(() => {}, { objectStreams });
+  const first = await signPades(signer, original);
+  assert.deepEqual(first.subarray(0, original.length), original, 'first revision keeps the original bytes');
+  assert.match(Buffer.from(first.subarray(original.length)).toString('latin1'), objectStreams ? /\/Type \/XRef/ : /\nxref\n/);
+  assert.deepEqual(await inspectPdf(first), { pages: 2, signatures: 1 });
+
+  const second = await signPades(signer, first);
+  assert.deepEqual(second.subarray(0, first.length), first, 'first signed revision is byte-identical');
+  assert.match(Buffer.from(second.subarray(first.length)).toString('latin1'), new RegExp(`/Prev ${/startxref\s+(\d+)\s+%%EOF\s*$/.exec(Buffer.from(first).toString('latin1'))[1]}\\b`));
+  const signatures = allParts(second);
+  assert.equal(signatures.length, 2);
+  assert.ok(signatures[0].range[2] + signatures[0].range[3] === first.length, 'first ByteRange ends at the first revision');
+  assert.ok(signatures[1].range[2] + signatures[1].range[3] === second.length, 'second ByteRange covers the whole file');
+  for (const { covered, cms } of signatures) {
+    const verified = await verifyCms(new Uint8Array(cms), { detached: new Uint8Array(covered) });
+    assert.equal(verified.signers.length, 1);
+  }
+  assert.deepEqual(await fieldNamesOf(second), ['Signature1', 'Signature2']);
+  const doc = await PDFDocument.load(second);
+  assert.equal(doc.getPageCount(), 2);
+  assert.equal(doc.catalog.lookup(PDFName.of('AcroForm')).lookup(PDFName.of('SigFlags')).asNumber(), 3);
+
+  const third = await signPades(signer, second);
+  assert.deepEqual(third.subarray(0, second.length), second);
+  assert.equal(allParts(third).length, 3);
+  assert.deepEqual(await inspectPdf(third), { pages: 2, signatures: 3 });
+});
+
+test('PAdES keeps existing form fields and indirect /Annots when adding a signature', async () => {
+  const original = await syntheticPdf(async doc => {
+    const field = doc.getForm().createTextField('reference');
+    field.setText('Synthetic 42'); field.addToPage(doc.getPage(0), { x: 50, y: 700, width: 200, height: 20 });
+    const annots = doc.getPage(0).node.get(PDFName.of('Annots'));
+    doc.getPage(0).node.set(PDFName.of('Annots'), doc.context.register(annots));
+    const fields = doc.catalog.lookup(PDFName.of('AcroForm')).get(PDFName.of('Fields'));
+    doc.catalog.lookup(PDFName.of('AcroForm')).set(PDFName.of('Fields'), doc.context.register(fields));
+  });
+  const second = await signPades(signer, await signPades(signer, original));
+  assert.deepEqual(second.subarray(0, original.length), original);
+  const doc = await PDFDocument.load(second);
+  assert.equal(doc.getForm().getTextField('reference').getText(), 'Synthetic 42');
+  assert.deepEqual(await fieldNamesOf(second), ['Signature1', 'Signature2', 'reference']);
+  assert.equal(doc.getPage(0).node.lookup(PDFName.of('Annots')).size(), 3);
+});
+
+test('PAdES refuses a PDF whose cross-reference table does not point at its objects', async () => {
+  const original = Buffer.from(await syntheticPdf());
+  const text = original.toString('latin1');
+  const entry = /\n(\d{10}) 00000 n /.exec(text.slice(text.lastIndexOf('\nxref')));
+  const shifted = String(Number(entry[1]) + 1).padStart(10, '0');
+  const damaged = Buffer.from(text.slice(0, text.lastIndexOf('\nxref')) + text.slice(text.lastIndexOf('\nxref')).replace(`${entry[1]} 00000 n `, `${shifted} 00000 n `), 'latin1');
+  assert.equal(damaged.length, original.length);
+  assert.ok((await PDFDocument.load(damaged)).getPageCount() === 2, 'pdf-lib alone repairs the table silently');
+  await refusal(inspectPdf(new Uint8Array(damaged)), 'PDF_BROKEN');
+  const withoutStartxref = Buffer.from(text.replace(/startxref\s+\d+/, 'startxref\n0'), 'latin1');
+  await refusal(inspectPdf(new Uint8Array(withoutStartxref)), 'PDF_BROKEN');
+});
+
+test('PAdES still refuses an empty signature field next to a filled one', async () => {
+  const signed = await signPades(signer, await syntheticPdf());
+  const doc = await PDFDocument.load(signed);
+  const field = doc.context.register(doc.context.obj({ FT: 'Sig', T: PDFString.of('Empty') }));
+  doc.catalog.lookup(PDFName.of('AcroForm')).lookup(PDFName.of('Fields')).push(field);
+  const withEmpty = await doc.save({ useObjectStreams: false });
+  await refusal(inspectPdf(withEmpty), 'PDF_FIELD');
 });
 
 test('PAdES is not offered for GOST keys until a profile is independently validated', async () => {

@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { inspectPdf, signPades } from '../extension/crypto/pades.js';
 import { openContainer } from '../extension/crypto/signer.js';
@@ -6,6 +8,7 @@ import { rsaFixture, PASSWORD } from './helpers/fixtures.js';
 // Mutation fuzzing of the local PDF path: inspectPdf must only refuse with its own PDF_* codes,
 // and every document it accepts must sign (signPades re-checks its own output) or be refused.
 // Deterministic: `node tests/fuzz-pdf.mjs [count] [seed]`. Synthetic documents and key only.
+// FUZZ_PDF_OUT=<dir> also writes every signed output and the certificate for external validators.
 const count = Number(process.argv[2] || 3000);
 let seed = Number(process.argv[3] || 20261112);
 const rand = n => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
@@ -29,7 +32,10 @@ function mutate(input) {
   return Uint8Array.from(out);
 }
 
-const signer = await openContainer(rsaFixture({ purpose: 'emailProtection' }).container, PASSWORD);
+const fixture = rsaFixture({ purpose: 'emailProtection' });
+const signer = await openContainer(fixture.container, PASSWORD);
+const out = process.env.FUZZ_PDF_OUT;
+if (out) { mkdirSync(out, { recursive: true }); writeFileSync(join(out, 'cert.pem'), fixture.certificate); }
 const bases = [await base(1, false), await base(5, true), await base(40, false)];
 const result = { inputs: count, refused: {}, accepted: 0, signed: 0, signingRefused: {}, unexpected: [], maxInspectMs: 0, maxSignMs: 0 };
 const quiet = console.log; console.log = () => {};
@@ -42,7 +48,7 @@ try {
     catch (error) { if (error.pdf) result.refused[error.code] = (result.refused[error.code] || 0) + 1; else result.unexpected.push(`inspect #${i}: ${String(error).slice(0, 120)}`); continue; }
     finally { result.maxInspectMs = Math.max(result.maxInspectMs, Math.round(performance.now() - started)); }
     started = performance.now();
-    try { const signed = await signPades(signer, data); if (signed.length > data.length) result.signed++; else result.unexpected.push(`sign #${i}: output not larger than input`); }
+    try { const signed = await signPades(signer, data); if (signed.length > data.length) { result.signed++; if (out) { writeFileSync(join(out, `signed-${i}.pdf`), signed); writeFileSync(join(out, `input-${i}.pdf`), data); } } else result.unexpected.push(`sign #${i}: output not larger than input`); }
     catch (error) { const key = String(error.code || error.message).slice(0, 80); result.signingRefused[key] = (result.signingRefused[key] || 0) + 1; }
     result.maxSignMs = Math.max(result.maxSignMs, Math.round(performance.now() - started));
   }

@@ -53,11 +53,6 @@ for (const target of ['chromium', 'firefox']) {
       plugin.onResolve({ filter: /^(crypto|util)$/ }, args => {
         if (args.importer.includes('xml-crypto')) return { path: shim };
       });
-    } }, { name: 'signpdf-buffer', setup(plugin) {
-      // @signpdf expects Node's Buffer; give only its modules the polyfill instead of a global.
-      plugin.onLoad({ filter: /[\\/]node_modules[\\/]@signpdf[\\/].*\.js$/ }, async args => ({
-        contents: 'var Buffer = require("buffer/").Buffer;\n' + await readFile(args.path, 'utf8'), loader: 'js'
-      }));
     } }]
   });
   await cp(new URL('../INSTALL.md', import.meta.url), new URL('INSTALL.md', destination));
@@ -66,11 +61,8 @@ for (const target of ['chromium', 'firefox']) {
   await cp(new URL('vendor/gost/LICENSE.txt', source), new URL('gost-apache-2.0.txt', licenses));
   await cp(new URL('../THIRD_PARTY_NOTICES.md', import.meta.url), new URL('THIRD_PARTY_NOTICES.md', destination));
   for (const [name, file] of [['node-forge', 'LICENSE'], ['@xmldom/xmldom', 'LICENSE'], ['xml-crypto', 'LICENSE'], ['xpath', 'LICENSE'], ['@xmldom/is-dom-node', 'LICENSE.md'],
-    ['pdf-lib', 'LICENSE.md'], ['@pdf-lib/standard-fonts', 'LICENSE.md'], ['@pdf-lib/upng', 'LICENSE'], ['pako', 'LICENSE'], ['tslib', 'LICENSE.txt'],
-    ['buffer', 'LICENSE'], ['base64-js', 'LICENSE'], ['ieee754', 'LICENSE']]) {
+    ['pdf-lib', 'LICENSE.md'], ['@pdf-lib/standard-fonts', 'LICENSE.md'], ['@pdf-lib/upng', 'LICENSE'], ['pako', 'LICENSE'], ['tslib', 'LICENSE.txt']]) {
     await cp(new URL(`../node_modules/${name}/${file}`, import.meta.url), new URL(`${name.replaceAll('/', '-')}.txt`, licenses));
   }
-  // @signpdf packages are published without a license file; this is the upstream MIT text.
-  await cp(new URL('../licenses/signpdf-LICENSE.txt', import.meta.url), new URL('signpdf.txt', licenses));
 }
 console.log('Built local signing extensions: dist/chromium and dist/firefox.');

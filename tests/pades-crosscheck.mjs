@@ -47,6 +47,30 @@ function expectValid(name, cert) {
   assert.deepEqual(hankoResult.signedAttributes, ['1.2.840.113549.1.9.16.2.47', '1.2.840.113549.1.9.3', '1.2.840.113549.1.9.4']);
   return { dss: dssResult, hanko: hankoResult };
 }
+// Two signatures in separate revisions: the earlier one sees only a signature added after it.
+function expectTwo(name, cert, { foreignSecond = false } = {}) {
+  const dssResults = runDss(file(name), cert), hankoResults = runHanko(file(name), cert);
+  assert.equal(dssResults.length, 2); assert.equal(hankoResults.length, 2);
+  for (const item of dssResults) {
+    assert.equal(item.indication, 'TOTAL_PASSED', JSON.stringify(item));
+    assert.ok(item.intact && item.valid && item.byteRangeValid);
+    assert.equal(item.modifications, false, JSON.stringify(item));
+    assert.equal(item.undefinedChanges + item.annotationChanges, 0, JSON.stringify(item));
+    // pyHanko registers its ESIC developer extension in the catalog; Tegin adds none.
+    if (!foreignSecond) assert.equal(item.extensionChanges, 0, JSON.stringify(item));
+  }
+  assert.ok(dssResults[0].signatureOrFormFillChanges > 0, JSON.stringify(dssResults[0]));
+  for (const item of hankoResults) assert.ok(item.intact && item.valid && item.trusted && item.bottomLine && item.docmdpOk, JSON.stringify(item));
+  const [first, second] = hankoResults;
+  assert.equal(first.coverage, 'ENTIRE_REVISION'); assert.equal(first.modificationLevel, 'FORM_FILLING');
+  assert.equal(second.coverage, 'ENTIRE_FILE'); assert.equal(second.modificationLevel, 'NONE');
+  if (!foreignSecond) { assert.equal(dssResults[1].format, 'PAdES-BASELINE-B'); assert.equal(second.adesBasic, 'PASSED'); }
+  assert.notEqual(first.fieldName, second.fieldName);
+  return {
+    first: `DSS ${dssResults[0].indication}, signature/form-fill changes ${dssResults[0].signatureOrFormFillChanges}, extension ${dssResults[0].extensionChanges}, undefined 0; pyHanko ${first.coverage}/${first.modificationLevel}`,
+    second: `DSS ${dssResults[1].indication} ${dssResults[1].format}; pyHanko ${second.coverage}/${second.modificationLevel}`
+  };
+}
 function expectBroken(name, cert) {
   const [dssResult] = runDss(file(name), cert), [hankoResult] = runHanko(file(name), cert);
   assert.equal(dssResult.indication, 'TOTAL_FAILED', JSON.stringify(dssResult));
@@ -98,10 +122,47 @@ try {
     await assert.rejects(inspectPdf(new Uint8Array(readFileSync(file('encrypted.pdf')))), error => error.code === 'PDF_ENCRYPTED');
     writeFileSync(file('key.pem'), key.publicKey);
     hanko('sign', file('plain.pdf'), file('foreign.pdf'), file('key.pem'), cert);
-    const foreign = new Uint8Array(readFileSync(file('foreign.pdf')));
-    await assert.rejects(inspectPdf(foreign), error => error.code === 'PDF_SIGNED');
-    await assert.rejects(signPades(signer, foreign), error => error.code === 'PDF_SIGNED');
-    assert.equal(runHanko(file('foreign.pdf'), cert)[0].bottomLine, true);
-    console.log('PASS: real encrypted PDF (pyHanko) and PDF signed by pyHanko are refused; the foreign signature stays valid');
+    console.log('PASS: real encrypted PDF (pyHanko) is refused');
+
+    // Second signature: Tegin after Tegin, Tegin after pyHanko, pyHanko after Tegin.
+    for (const [label, base] of [['plain', 'rsa2048-plain.pdf'], ['object streams + form field', 'rsa2048-object-streams-form-field.pdf'], ['after a pyHanko signature', 'foreign.pdf']]) {
+      const first = new Uint8Array(readFileSync(file(base)));
+      const second = await signPades(signer, first);
+      assert.deepEqual(second.subarray(0, first.length), first, 'first signed revision is byte-identical');
+      const name = `second-${label.replace(/\W+/g, '-')}.pdf`;
+      writeFileSync(file(name), second);
+      const result = expectTwo(name, cert);
+      console.log(`PASS: second Tegin signature, ${label}: first ${result.first}; second ${result.second}; first revision bytes unchanged`);
+    }
+    hanko('sign', file('rsa2048-plain.pdf'), file('hanko-second.pdf'), file('key.pem'), cert);
+    assert.deepEqual(readFileSync(file('hanko-second.pdf')).subarray(0, signed.length), signed);
+    const result = expectTwo('hanko-second.pdf', cert, { foreignSecond: true });
+    console.log(`PASS: pyHanko signs after Tegin: first ${result.first}; second ${result.second}`);
+
+    hanko('modify', file('second-plain.pdf'), file('second-modified.pdf'));
+    const dssBoth = runDss(file('second-modified.pdf'), cert), hankoBoth = runHanko(file('second-modified.pdf'), cert);
+    assert.equal(dssBoth.length, 2); assert.equal(hankoBoth.length, 2);
+    for (const item of dssBoth) {
+      assert.ok(item.intact && item.valid, JSON.stringify(item));
+      assert.equal(item.modifications, true);
+      assert.ok(item.undefinedChanges > 0, JSON.stringify(item));
+      assert.ok(item.warnings.some(warning => /undefined object modifications/.test(warning)), JSON.stringify(item));
+    }
+    for (const item of hankoBoth) {
+      assert.ok(item.intact && item.valid, JSON.stringify(item));
+      assert.equal(item.coverage, 'ENTIRE_REVISION');
+      assert.equal(item.modificationLevel, 'OTHER');
+      assert.equal(item.bottomLine, false);
+    }
+    console.log(`PASS: page drawn over after two signatures: DSS undefined changes ${dssBoth.map(item => item.undefinedChanges).join('/')}, warnings ${JSON.stringify(dssBoth[0].warnings)}; pyHanko ${hankoBoth.map(item => item.modificationLevel).join('/')}, bottom line false`);
+
+    const two = readFileSync(file('second-plain.pdf'));
+    const changed = Buffer.from(two.toString('latin1').replace('/MediaBox [ 0 0 595 842 ]', '/MediaBox [ 0 0 595 841 ]'), 'latin1');
+    assert.notDeepEqual(changed, two);
+    writeFileSync(file('second-tampered.pdf'), changed);
+    const dssTampered = runDss(file('second-tampered.pdf'), cert), hankoTampered = runHanko(file('second-tampered.pdf'), cert);
+    assert.ok(dssTampered.every(item => item.indication === 'TOTAL_FAILED' && !item.intact), JSON.stringify(dssTampered));
+    assert.ok(hankoTampered.every(item => !item.intact && !item.bottomLine));
+    console.log('PASS: byte changed inside the first revision of a two-signature PDF: both signatures fail in DSS and pyHanko');
   }
 } finally { rmSync(folder, { recursive: true, force: true }); }

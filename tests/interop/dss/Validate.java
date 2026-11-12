@@ -24,6 +24,10 @@ public class Validate {
   static String list(List<Message> messages) {
     return messages.stream().map(m -> q(m.getValue())).collect(Collectors.joining(",", "[", "]"));
   }
+  static String names(List<String> values) {
+    return values == null ? "[]" : values.stream().map(Validate::q).collect(Collectors.joining(",", "[", "]"));
+  }
+  static int count(List<?> values) { return values == null ? 0 : values.size(); }
   public static void main(String[] args) throws Exception {
     CommonTrustedCertificateSource trusted = new CommonTrustedCertificateSource();
     trusted.addCertificate(DSSUtils.loadCertificate(Files.readAllBytes(new File(args[1]).toPath())));
@@ -55,6 +59,11 @@ public class Validate {
         .append("\"byteRangeValid\":").append(revision != null && revision.isSignatureByteRangeValid()).append(',')
         .append("\"modifications\":").append(revision != null && revision.arePdfModificationsDetected()).append(',')
         .append("\"objectModifications\":").append(revision != null && revision.arePdfObjectModificationsDetected()).append(',')
+        .append("\"fieldNames\":").append(names(revision == null ? null : revision.getSignatureFieldNames())).append(',')
+        .append("\"signatureOrFormFillChanges\":").append(revision == null ? 0 : count(revision.getPdfSignatureOrFormFillChanges())).append(',')
+        .append("\"annotationChanges\":").append(revision == null ? 0 : count(revision.getPdfAnnotationChanges())).append(',')
+        .append("\"extensionChanges\":").append(revision == null ? 0 : count(revision.getPdfExtensionChanges())).append(',')
+        .append("\"undefinedChanges\":").append(revision == null ? 0 : count(revision.getPdfUndefinedChanges())).append(',')
         .append("\"errors\":").append(list(simple.getAdESValidationErrors(id))).append(',')
         .append("\"warnings\":").append(list(simple.getAdESValidationWarnings(id)))
         .append('}');

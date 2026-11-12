@@ -497,8 +497,26 @@ try {
 
   await pdfTool.locator('#again').click();
   await choosePades('contract.signed.pdf', signedPdf);
-  await pdfTool.locator('#status[data-error]').filter({ hasText: 'уже содержит электронную подпись' }).waitFor();
-  assert.equal(await pdfTool.locator('#unlock').isDisabled(), true);
+  await pdfTool.locator('#status').filter({ hasText: 'PDF готов к подписи' }).waitFor();
+  assert.match(await pdfTool.locator('#data-description').textContent(), /уже есть подписи: 1\. Новая подпись будет добавлена отдельной ревизией/);
+  await pdfTool.locator('#key-file').setInputFiles({ name: 'test.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(fixture.container) });
+  await pdfTool.locator('#password').fill(PASSWORD); await pdfTool.locator('#unlock').click();
+  await pdfTool.locator('#certificate:not([hidden])').waitFor();
+  await pdfTool.locator('#approve').click();
+  await pdfTool.locator('#result-title').filter({ hasText: 'PDF подписан' }).waitFor();
+  const secondDownload = pdfTool.waitForEvent('download'); await pdfTool.locator('#download').click();
+  const secondPdfPath = join(folder, 'contract.signed.signed.pdf'); await (await secondDownload).saveAs(secondPdfPath);
+  const secondPdf = readFileSync(secondPdfPath);
+  assert.deepEqual(secondPdf.subarray(0, signedPdf.length), signedPdf, 'first signed revision is byte-identical');
+  assert.equal([...secondPdf.toString('latin1').matchAll(/\/ByteRange \[/g)].length, 2);
+  if (process.env.DSS_VALIDATOR) {
+    const dssResults = JSON.parse(execFileSync('java', ['-cp', `${process.env.DSS_VALIDATOR}/classes:${process.env.DSS_VALIDATOR}/lib/*`, 'Validate', secondPdfPath, join(folder, 'cert.pem')], { encoding: 'utf8' })).signatures;
+    const hankoResults = JSON.parse(execFileSync('python3', [resolve('tests/independent_pades.py'), 'validate', secondPdfPath, join(folder, 'cert.pem')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).signatures;
+    assert.ok(dssResults.length === 2 && dssResults.every(item => item.indication === 'TOTAL_PASSED' && !item.modifications && !item.undefinedChanges), JSON.stringify(dssResults));
+    assert.deepEqual(hankoResults.map(item => [item.bottomLine, item.coverage, item.modificationLevel]), [[true, 'ENTIRE_REVISION', 'FORM_FILLING'], [true, 'ENTIRE_FILE', 'NONE']]);
+  }
+  console.log(`PASS: second PAdES signature in the browser: first revision byte-identical${process.env.DSS_VALIDATOR ? '; EU DSS both TOTAL_PASSED without undefined changes, pyHanko FORM_FILLING / ENTIRE_FILE' : ''}`);
+  await pdfTool.locator('#again').click();
   await choosePades('notes.txt', Buffer.from('not a pdf'));
   await pdfTool.locator('#status[data-error]').filter({ hasText: 'только для PDF' }).waitFor();
   // The key is chosen while the PDF pre-check may still run: the check must not be cancelled.
@@ -508,7 +526,7 @@ try {
   await pdfTool.locator('#status[data-error]').filter({ hasText: 'только для ключей RSA' }).waitFor();
   assert.equal(await pdfTool.locator('#approve').isDisabled(), true);
   await pdfTool.close();
-  console.log('PASS: PAdES refuses an already signed PDF, a non-PDF file and a GOST key with explicit messages');
+  console.log('PASS: PAdES refuses a non-PDF file and a GOST key with explicit messages');
 
   for (const width of [1280, 870, 400]) {
     await tool.locator('#nav-verify').click(); await tool.setViewportSize({ width, height: 900 });

@@ -15,7 +15,7 @@ const hex = value => [...value].map(byte => byte.toString(16).padStart(2, '0')).
 const dateTime = value => new Date(value).toLocaleString('ru-RU');
 const isPdf = data => new TextDecoder('latin1').decode(data.subarray(0, 1024)).includes('%PDF-');
 const FORMAT_HELP = 'Документ будет сохранён вместе с подписью (.p7s).';
-const PADES_HELP = 'Подпись будет встроена в PDF (PAdES-B-B). Tegin сохранит новый файл .signed.pdf; зашифрованные и уже подписанные PDF не подписываются.';
+const PADES_HELP = 'Подпись будет встроена в PDF (PAdES-B-B). Tegin сохранит новый файл .signed.pdf. В подписанный PDF подпись добавляется отдельной ревизией, прежние подписи не меняются; зашифрованные и заверенные (DocMDP) PDF не подписываются.';
 
 const REVOCATION_LABELS = { good: 'Не отозван по актуальным данным', revoked: 'Отозван', unknown: 'Статус неизвестен', 'not-checked': 'Не проверялся', unavailable: 'Проверка недоступна' };
 const REVOCATION_SOURCES = { ocsp: 'OCSP НУЦ', crl: 'список отзыва (CRL)', 'crl+delta': 'список отзыва (CRL + delta)' };
@@ -123,7 +123,7 @@ async function showData() {
   $('#data-description').textContent = info ? 'Сайт получит публичный сертификат. Закрытый ключ не передаётся.' : request.digested ? 'Сайт передал только хеш. Сам документ недоступен для просмотра. Подтверждая операцию, вы подписываете этот хеш.' : 'Проверьте документ: подпись будет создана для переданных данных.';
   if (service) $('#data-description').textContent = service.description;
   if (request.xpath) $('#data-description').textContent = `Подписывается не весь XML, а только элемент по пути ${request.xpath.tbsXPath} (с его содержимым). Подпись будет добавлена в элемент ${request.xpath.parentXPath || '(не указан)'}. Остальные части документа подписью не защищены.`;
-  if (request.format === 'pades') $('#data-description').textContent = `Подпись будет встроена в PDF (${request.pages} стр.). Tegin сохранит новый файл с подписью, исходный файл не изменится.`;
+  if (request.format === 'pades') $('#data-description').textContent = `Подпись будет встроена в PDF (${request.pages} стр.). Tegin сохранит новый файл с подписью, исходный файл не изменится.${request.signatures ? ` В документе уже есть подписи: ${request.signatures}. Новая подпись будет добавлена отдельной ревизией, прежние подписи и подписанные ими данные не изменятся.` : ''}`;
   $('#footer-note').lastChild.textContent = request.digested ? 'Подтверждение подписи хеша' : 'Подпись только с вашего согласия';
   if (info) { $('#preview').textContent = 'Для этой операции документ не требуется.'; $('#source').textContent = 'Публичные сведения о выбранном сертификате.'; return; }
   const previews = [], sources = []; let total = 0; const hashes = [];
@@ -212,7 +212,7 @@ async function localDocument(autoVerify = false) {
         report('Проверяем PDF…');
         const inspected = await inspectPdfFile(buffer.slice().buffer);
         if (revision !== documentRevision) return;
-        request = { operation: 'sign', format: 'pades', documents, decode: true, encapsulate: false, cades: false, timestamp: false, pages: inspected.pages };
+        request = { operation: 'sign', format: 'pades', documents, decode: true, encapsulate: false, cades: false, timestamp: false, pages: inspected.pages, signatures: inspected.signatures };
         await showData();
         report($('#key-file').files[0] ? 'PDF готов к подписи.' : 'PDF готов к подписи. Выберите ключ ЭЦП.'); updateControls();
         return;
