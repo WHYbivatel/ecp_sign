@@ -240,6 +240,30 @@ test('an empty hidden storage field ([""] from split) leaves basics.sign unrestr
   assert.equal(empty.signerParams.chain.length, nucCabinet.request.args.signerParams.chain.length);
 });
 
+// signXml() of /js/signature-basics.js on the cabinet pages that sign an application (IS, reissue)
+// or confirm an employee's application. The EKU list is the page's hidden key purpose, split by ",";
+// the real values behind the login are not observed, so the first-head OID from the NUC SDK is used.
+test('NUC application signing and first-head confirmation keep purpose, trust and exact XML', () => {
+  const FIRST_HEAD = '1.2.398.3.3.4.1.2.1';
+  const application = '<?xml version="1.0" encoding="UTF-8" standalone="no"?><application><id>00000000</id><action>confirm</action></application>';
+  const confirm = (keyPurpose, chain = nucCabinet.request.args.signerParams.chain) => normalizeRequest(withArgs(nucCabinet.request, {
+    allowedStorages: [''], format: 'xml', data: application, signingParams: { decode: false, encapsulate: false, digested: false, tsaProfile: null },
+    signerParams: { extKeyUsageOids: keyPurpose ? keyPurpose.split(',') : [], chain } }));
+  const request = confirm(`${SIGN},${FIRST_HEAD}`);
+  assert.deepEqual(request.documents, [application]);
+  assert.equal(request.format, 'xml'); assert.equal(request.timestamp, false); assert.equal(request.trustRequired, true);
+  assert.deepEqual(request.signerParams.extKeyUsageOids, [SIGN, FIRST_HEAD]);
+  const info = eku => ({ ca: false, keyOid: '1.2.840.113549.1.1.1', keyUsage: 192, eku, summary: { notBefore: '2025-01-01T00:00:00Z' } });
+  const trusted = { trusted: true, ncaTrusted: true };
+  assert.doesNotThrow(() => checkSignerConstraints(info([SIGN, FIRST_HEAD]), request, trusted));
+  // An employee's signing certificate cannot confirm on behalf of the first head.
+  assert.throws(() => checkSignerConstraints(info([SIGN, '1.2.398.3.3.4.1.2.2']), request, trusted), new RegExp(FIRST_HEAD.replaceAll('.', '\\.')));
+  assert.throws(() => checkSignerConstraints(info([SIGN, FIRST_HEAD]), request, { trusted: false, reason: 'нет цепочки' }), /доверенную цепочку/);
+  // An empty purpose field allows any purpose; an empty CA field is refused rather than treated as "no chain".
+  assert.deepEqual(confirm('').signerParams.extKeyUsageOids, []);
+  assert.throws(() => confirm(`${SIGN},${FIRST_HEAD}`, ['']), /цепочка/);
+});
+
 test('response envelopes match what the observed portal clients read', () => {
   const basics = successResponse(egovLogin.request, { result: ['<signed/>'] });
   assert.deepEqual(basics, { status: true, body: { result: ['<signed/>'] } });
