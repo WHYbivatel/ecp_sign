@@ -6,8 +6,8 @@
 
 | Реализация Tegin | Реализованные операции (проверены локально) | Ограничения |
 | --- | --- | --- |
-| НУЦ Common Utils | getKeyInfo, signXml/signXmls, CMS/CAdES из base64 и готового хеша | Не весь Common Bundle. Аргумент keyType (SIGNATURE/AUTHENTICATION) не сужает выбор сертификата; getActiveTokens всегда возвращает пустой список |
-| НУЦ Basics | sign: XML, CMS/CAdES, raw, пакет до 10 документов | PKCS12; без токенов; XML без XPath и доподписания. raw — расширение Tegin, в документации НУЦ есть только xml и cms |
+| НУЦ Common Utils | getKeyInfo, signXml/signXmls, CMS/CAdES из base64 и готового хеша | Не весь Common Bundle. Аргумент keyType (SIGNATURE/AUTHENTICATION) сужает выбор по правилу NCALayer ([ncalayer-reference.md](ncalayer-reference.md)); getActiveTokens всегда возвращает пустой список: токены не поддерживаются |
+| НУЦ Basics | sign: XML, CMS/CAdES, raw, пакет до 10 документов | PKCS12; без токенов; XML без XPath и доподписания. raw есть и в NCALayer 0.4.10 (в wiki НУЦ его нет). Отличия формы ответа: CMS — base64 вместо PEM, raw — всегда массив |
 | Госзакупки NURSign 5.1.2 | type=xml, multixml, binary, text, multitext, version | Только переданные данные; нет file, remote URL, needHash. text/multitext требуют TSA; не понижаются до BES |
 | Самрук-Казына ИСЭЗ 1.0 | signXml, version | Целый XML; ответ с uid; newChain=null, повторный выбор ключа вместо кэша пароля |
 | СФД QIWI 1.3 | signXml, logOut | callID сохранён; verificationResult=true выдаётся после проверки созданного XML |

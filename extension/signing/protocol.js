@@ -17,7 +17,8 @@ export function normalizeRequest(input) {
   if (JSON.stringify(input).length > MAX_MESSAGE_LENGTH) unsupported('Запрос превышает допустимый размер.');
   const adapted = adaptRequest(input);
   if (adapted) {
-    if (adapted.commonInput) return { ...normalizeRequest(adapted.commonInput), moduleId: adapted.moduleId, ...(adapted.constraints ? { signerParams: adapted.constraints } : {}) };
+    // Third-party modules keep their own keyType mapping; the NCALayer key type rule is Common Utils' own.
+    if (adapted.commonInput) return { ...normalizeRequest(adapted.commonInput), moduleId: adapted.moduleId, signerParams: adapted.constraints || {} };
     if (adapted.moduleId === 'qiwi') adapted.callId = input.args[0];
     return adapted;
   }
@@ -26,17 +27,19 @@ export function normalizeRequest(input) {
     if (method === 'getActiveTokens') return { immediate: true, value: [] };
     if (method === 'changeLocale') return { immediate: true, value: true };
     if (!Array.isArray(args) || args[0] !== 'PKCS12') unsupported('Поддерживаются только файловые ключи PKCS#12.');
-    if (method === 'getKeyInfo') return { operation: 'info', documents: [], format: 'info' };
+    // keyType filters keys as in NCALayer; any other value, like its absence, means signature or authentication keys.
+    const signerParams = { kncaType: method !== 'getKeyInfo' && ['SIGNATURE', 'AUTHENTICATION'].includes(args[1]) ? args[1] : null };
+    if (method === 'getKeyInfo') return { operation: 'info', documents: [], format: 'info', signerParams };
     if (method === 'signXml' || method === 'signXmls') {
       const documents = method === 'signXmls' ? args[2] : [args[2]];
       if (!Array.isArray(documents) || !documents.length || documents.length > 10 || documents.some(doc => typeof doc !== 'string') || args[3] || args[4]) unsupported('Поддерживается подпись целого XML без XPath, до 10 документов.');
-      return { operation: 'sign', format: 'xml', documents, decode: false, multiple: method === 'signXmls' };
+      return { operation: 'sign', format: 'xml', documents, decode: false, multiple: method === 'signXmls', signerParams };
     }
     if (['createCMSSignatureFromBase64', 'createCAdESFromBase64', 'createCAdESFromBase64Hash'].includes(method)) {
       const digested = method === 'createCAdESFromBase64Hash';
       if (typeof args[2] !== 'string' || (!digested && typeof args[3] !== 'boolean')) unsupported('Некорректные параметры CMS.');
       return { operation: 'sign', format: 'cms', documents: [args[2]], decode: true, encapsulate: digested ? false : args[3], digested,
-        timestamp: method === 'createCMSSignatureFromBase64', cades: true };
+        timestamp: method === 'createCMSSignatureFromBase64', cades: true, signerParams };
     }
     unsupported();
   }
@@ -65,15 +68,15 @@ export function normalizeRequest(input) {
   unsupported();
 }
 
-export function successResponse(input, result) {
-  return adapterResponse(input, result) || (input.module === BASICS ? { status: true, body: result }
-    : input.module === COMMON ? commonResponse(input, input.method === 'changeLocale' ? { code: '200' } : { code: '200', responseObject: result })
-      : { code: '200', message: '', responseObject: result });
-}
 // NCALayer Common Utils answers every failure with code 500, omits empty fields and echoes a uuid.
 function commonResponse(input, fields) {
   const uuid = typeof input.uuid === 'number' ? String(input.uuid) : input.uuid;
   return typeof uuid === 'string' && uuid ? { ...fields, uuid } : fields;
+}
+export function successResponse(input, result) {
+  return adapterResponse(input, result) || (input.module === BASICS ? { status: true, body: result }
+    : input.module === COMMON ? commonResponse(input, input.method === 'changeLocale' ? { code: '200' } : { code: '200', responseObject: result })
+      : { code: '200', message: '', responseObject: result });
 }
 export function errorResponse(input, message, cancelled = false) {
   return adapterResponse(input, undefined, message, cancelled) || (input?.module === BASICS

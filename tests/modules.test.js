@@ -40,14 +40,17 @@ test('inspected module requests preserve data, signing profiles and response env
 });
 test('the catalog never presents a Tegin adapter as the installed or complete original module', async () => {
   assert.ok(modules.every(module => module.support === 'partial' && !('available' in module)));
-  assert.match(modules.find(module => module.id === 'common').limitations, /не сужает выбор/);
-  assert.match(modules.find(module => module.id === 'basics').limitations, /raw — расширение Tegin/);
+  assert.match(modules.find(module => module.id === 'common').limitations, /сужает выбор сертификата, как в NCALayer/);
+  assert.match(modules.find(module => module.id === 'basics').limitations, /NCALayer 0\.4\.10 отдаёт CMS в PEM/);
   const { readFileSync } = await import('node:fs');
   const page = readFileSync(new URL('../extension/modules/modules.js', import.meta.url), 'utf8');
   assert.doesNotMatch(page, /установлен|полная поддержка|\$\{modules\.length\} доступно/i);
   assert.match(page, /Оригинальная библиотека NCALayer не устанавливается/);
-  assert.equal(normalizeRequest({ module: 'kz.gov.pki.knca.commonUtils', method: 'signXml', args: ['PKCS12', 'AUTHENTICATION', '<a/>', '', ''] }).signerParams, undefined,
-    'Common Utils keyType is documented as not filtering; changing that needs a confirmed NCALayer contract');
+  // Common Bundle 0.3.4 filters keys by keyType; an unknown value behaves like none (docs/ncalayer-reference.md).
+  const keyType = value => normalizeRequest({ module: 'kz.gov.pki.knca.commonUtils', method: 'signXml', args: ['PKCS12', value, '<a/>', '', ''] }).signerParams;
+  assert.deepEqual(keyType('AUTHENTICATION'), { kncaType: 'AUTHENTICATION' });
+  assert.deepEqual(keyType('SIGNATURE'), { kncaType: 'SIGNATURE' });
+  for (const value of ['', 'SIGN', null]) assert.deepEqual(keyType(value), { kncaType: null });
 });
 test('module restrictions cannot silently alter a request or admit credentials in settings', () => {
   const module = findModule('NURSign'), origin = 'https://portal.goszakup.gov.kz';

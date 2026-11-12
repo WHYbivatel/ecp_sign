@@ -19,7 +19,7 @@ export const OPENSSL_PROFILES = {
 // Passwords travel to OpenSSL through the environment to keep spaces and Unicode exact.
 export const opensslPassword = password => ({ stdio: 'pipe', env: { ...process.env, TEGIN_TEST_P12_PASSWORD: password } });
 
-export function rsaFixture({ purpose, password = PASSWORD, profile = 'default', subject = '/CN=Tegin disposable test', keySpec = 'rsa:2048', validity } = {}) {
+export function rsaFixture({ purpose, keyUsage, password = PASSWORD, profile = 'default', subject = '/CN=Tegin disposable test', keySpec = 'rsa:2048', validity } = {}) {
   if (purpose && !['clientAuth', 'emailProtection'].includes(purpose)) throw new Error('Unsupported fixture purpose');
   if (!OPENSSL_PROFILES[profile]) throw new Error('Unsupported fixture profile');
   if (validity && keySpec.startsWith('ec:')) throw new Error('Custom validity is supported for RSA fixtures only');
@@ -27,7 +27,8 @@ export function rsaFixture({ purpose, password = PASSWORD, profile = 'default', 
   try {
     const keyArgs = keySpec.startsWith('ec:') ? ['-newkey', 'ec', '-pkeyopt', `ec_paramgen_curve:${keySpec.slice(3)}`] : ['-newkey', keySpec];
     execFileSync('openssl', ['req', '-x509', ...keyArgs, '-nodes', '-keyout', join(folder, 'key.pem'), '-utf8',
-      '-out', join(folder, 'cert.pem'), '-days', '2', '-subj', subject, ...(purpose ? ['-addext', 'extendedKeyUsage=' + purpose] : [])], { stdio: 'ignore' });
+      '-out', join(folder, 'cert.pem'), '-days', '2', '-subj', subject, ...(purpose ? ['-addext', 'extendedKeyUsage=' + purpose] : []),
+      ...(keyUsage ? ['-addext', 'keyUsage=' + keyUsage] : [])], { stdio: 'ignore' });
     // OpenSSL 3.0 cannot backdate `req -x509`; re-sign the same self-signed certificate with the requested dates.
     if (validity) {
       const certificate = forge.pki.certificateFromPem(readFileSync(join(folder, 'cert.pem'), 'utf8'));

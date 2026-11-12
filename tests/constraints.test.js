@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkSignerConstraints, CLIENT_AUTH, isUnifiedNcaCertificate } from '../extension/crypto/constraints.js';
+import { checkSignerConstraints, CLIENT_AUTH, isUnifiedNcaCertificate, kncaKeyTypes } from '../extension/crypto/constraints.js';
 import { O } from '../extension/crypto/encoding.js';
 const EMAIL = '1.3.6.1.5.5.7.3.4';
 const request = { signerParams: { extKeyUsageOids: [CLIENT_AUTH] }, trustRequired: true };
@@ -36,4 +36,27 @@ test('unified NUC GOST policy resolves legacy clientAuth filter only for a verif
   const organization = { ...info, eku: [EMAIL, '1.2.398.3.3.4.1.2', '1.2.398.3.3.4.1.2.1'] };
   assert.equal(isUnifiedNcaCertificate(organization, pinned), true);
   assert.equal(isUnifiedNcaCertificate({ ...organization, summary: { notBefore: '2023-01-01T00:00:00Z' } }, pinned), false);
+});
+
+test('Common Utils keyType follows the NCALayer key type rule', () => {
+  const SIGN = 0x80 | 0x40, AUTH = 0x80 | 0x20, RSA = '1.2.840.113549.1.1.11';
+  const types = info => [...kncaKeyTypes({ eku: [], summary: {}, ...info })].sort();
+  assert.deepEqual(types({ keyUsage: SIGN, signatureOid: O.sig2004 }), ['SIGNATURE']);
+  assert.deepEqual(types({ keyUsage: SIGN, signatureOid: O.sig512 }), ['AUTHENTICATION', 'SIGNATURE']);
+  assert.deepEqual(types({ keyUsage: SIGN, signatureOid: RSA }), ['SIGNATURE']);
+  assert.deepEqual(types({ keyUsage: SIGN | 0x08, signatureOid: RSA }), ['AUTHENTICATION', 'SIGNATURE']);
+  assert.deepEqual(types({ keyUsage: AUTH, signatureOid: RSA, eku: [CLIENT_AUTH] }), ['AUTHENTICATION']);
+  assert.deepEqual(types({ keyUsage: AUTH, signatureOid: RSA }), []);
+  assert.deepEqual(types({ keyUsage: null, signatureOid: O.sig512, eku: [CLIENT_AUTH] }), []);
+  const signing = { keyUsage: SIGN, signatureOid: O.sig2004, eku: [EMAIL], summary: {} };
+  const auth = { keyUsage: AUTH, signatureOid: RSA, eku: [CLIENT_AUTH], summary: {} };
+  const other = { keyUsage: 0x80, signatureOid: RSA, eku: [], summary: {} };
+  const check = (info, kncaType) => checkSignerConstraints(info, { signerParams: { kncaType } }, trusted);
+  assert.doesNotThrow(() => check(signing, 'SIGNATURE'));
+  assert.throws(() => check(signing, 'AUTHENTICATION'), /для аутентификации/);
+  assert.doesNotThrow(() => check(auth, 'AUTHENTICATION'));
+  assert.throws(() => check(auth, 'SIGNATURE'), /для подписи/);
+  for (const info of [signing, auth]) assert.doesNotThrow(() => check(info, null));
+  assert.throws(() => check(other, null), /для подписи или для аутентификации/);
+  assert.doesNotThrow(() => checkSignerConstraints(other, { signerParams: {} }, trusted), 'basics requests carry no key type');
 });

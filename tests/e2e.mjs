@@ -15,8 +15,10 @@ import { PDFDocument } from 'pdf-lib';
 
 const folder = mkdtempSync(join(tmpdir(), 'ncabrowser-e2e-'));
 const extension = resolve('dist/chromium');
-const fixture = rsaFixture();
-const gost = gostFixture();
+// Common Utils shows only signature or authentication keys, so its keys carry NCALayer key usages.
+const SIGNATURE_USAGE = 'digitalSignature,nonRepudiation';
+const fixture = rsaFixture({ keyUsage: SIGNATURE_USAGE });
+const gost = gostFixture('512', { keyUsage: true });
 const server = createServer((req, res) => {
   if (req.url === '/ncalayer-client.js') {
     res.setHeader('Content-Type', 'text/javascript; charset=utf-8');
@@ -118,9 +120,25 @@ try {
   assert.deepEqual(readFileSync(join(folder, 'document')), data);
   console.log('PASS: browser PKCS12 unlock, wrong password rejection, explicit approval, CMS verified by OpenSSL');
 
+  const untyped = rsaFixture();
+  for (const keyType of ['SIGNATURE', 'AUTHENTICATION']) {
+    const opened = context.waitForEvent('page');
+    await send({ ...common, args: ['PKCS12', keyType, ...common.args.slice(2)] });
+    popup = await opened;
+    await popup.waitForURL(`chrome-extension://${extensionId}/signing/approve.html#*`);
+    await popup.locator('#key-file').setInputFiles({ name: 'untyped.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from((keyType === 'SIGNATURE' ? untyped : rsaFixture({ keyUsage: SIGNATURE_USAGE, purpose: 'emailProtection' })).container) });
+    await popup.locator('#password').fill(PASSWORD); await popup.locator('#unlock').click();
+    await popup.locator('#status[data-error]').filter({ hasText: keyType === 'SIGNATURE' ? 'для подписи' : 'для аутентификации' }).waitFor();
+    assert.equal(await popup.locator('#approve').isDisabled(), true);
+    await popup.locator('#cancel').click();
+    assert.deepEqual(await result(), { code: '500', message: 'action.canceled' });
+  }
+  untyped.container.fill(0);
+  console.log('PASS: Common Utils keyType hides keys of another NCALayer type');
+
   // Regression: OpenSSL 3 default PKCS#12 (PBES2/AES-256) with a non-ASCII password.
   const unicodePassword = 'Ұлттық куәлік 2026 пароль';
-  const unicodeKey = rsaFixture({ password: unicodePassword });
+  const unicodeKey = rsaFixture({ password: unicodePassword, keyUsage: SIGNATURE_USAGE });
   const unicodeFile = { name: 'unicode-test-key.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(unicodeKey.container) };
   const unicodeOpened = context.waitForEvent('page');
   await send(common);
@@ -172,7 +190,7 @@ try {
 
   // A certificate-stage error replaces the key form with the certificate card; the diagnostic must stay reachable.
   const day = 24 * 60 * 60 * 1000;
-  const expiredKey = rsaFixture({ subject: '/CN=Tegin expired disposable test', validity: { notBefore: new Date(Date.now() - 30 * day), notAfter: new Date(Date.now() - day) } });
+  const expiredKey = rsaFixture({ keyUsage: SIGNATURE_USAGE, subject: '/CN=Tegin expired disposable test', validity: { notBefore: new Date(Date.now() - 30 * day), notAfter: new Date(Date.now() - day) } });
   // Chromium cannot grant clipboard access to the extension origin, so the copied text is read back from the fixture page.
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: `http://127.0.0.1:${port}` });
   const expiredOpened = context.waitForEvent('page');
@@ -335,7 +353,7 @@ try {
   assert.ok(Buffer.from(answer.responseObject, 'base64').length > 300);
   console.log('PASS: GOST-512 signing in a real extension worker');
   for (const family of ['256', '2004']) {
-    const key = gostFixture(family); popup = await confirmation(common, key);
+    const key = gostFixture(family, { keyUsage: true }); popup = await confirmation(common, key);
     await popup.locator('#approve').click(); answer = await result(); assert.equal(answer.code, '200', answer.message);
     key.container.fill(0); console.log(`PASS: GOST-${family} signing in a real extension worker`);
   }

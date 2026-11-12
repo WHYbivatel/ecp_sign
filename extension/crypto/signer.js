@@ -97,7 +97,7 @@ export function certificateInfo(raw) {
     }
   }
   return { certificate, spki, serial, issuer: tbs[offset + 2], subject,
-    raw: der(certificate), keyOid, algorithm, eku, ekuCritical, keyUsage, ca, pathLength, subjectKeyId, authorityKeyId, unknownCritical,
+    raw: der(certificate), signatureOid: oidValue(certificate.value[1].value[0]), keyOid, algorithm, eku, ekuCritical, keyUsage, ca, pathLength, subjectKeyId, authorityKeyId, unknownCritical,
     summary: {
       name: nameValue(subject, '2.5.4.3'), iin: /^IIN(\d{12})$/.exec(nameValue(subject, '2.5.4.5'))?.[1] || '',
       organization: nameValue(subject, '2.5.4.10'), issuer: nameValue(tbs[offset + 2], '2.5.4.3'),
