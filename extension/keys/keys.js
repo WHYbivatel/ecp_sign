@@ -62,8 +62,8 @@ function row(record) {
     yes.disabled = no.disabled = true;
     try {
       await removeRecord(api, record.slot);
-      report('Запись удалена.');
       await render();
+      report('Запись удалена.');
     } catch (error) { yes.disabled = no.disabled = false; report(error.message, true); }
   });
   item.append(top, tools, confirmBox);

@@ -63,6 +63,12 @@ jobs:
       # Fresh download, no cache: a changed jar in the published archive fails here.
       - run: node scripts/fetch-kalkan.mjs "$RUNNER_TEMP/kalkan" --xml >> "$GITHUB_ENV"
       - run: node tests/nursign-xml-crosscheck.mjs
+      # The bundles an installed NCALayer updates to, at the catalog snapshot hashes; a catalog change fails here
+      # and in the trust job.
+      - name: Bundles from the signed catalog (XMLDSig, knca_provider_util)
+        run: |
+          set -a; eval "$(node scripts/fetch-kalkan.mjs "$RUNNER_TEMP/kalkan" --current)"; set +a
+          node tests/nursign-xml-crosscheck.mjs
 
   live:
     name: live TSA and OCSP/CRL (manual)
