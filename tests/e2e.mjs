@@ -1,7 +1,7 @@
 import { chromium } from 'playwright';
 import { createServer } from 'node:http';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
-import { tmpdir, homedir } from 'node:os';
+import { tmpdir, homedir, devNull } from 'node:os';
 import { resolve, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
@@ -466,7 +466,7 @@ try {
   writeFileSync(join(folder, 'pades.der'), contents.subarray(0, 2 + lengthOctets + cmsLength));
   writeFileSync(join(folder, 'pades-covered'), Buffer.concat([signedPdf.subarray(0, first), signedPdf.subarray(second)]));
   execFileSync('openssl', ['cms', '-verify', '-binary', '-inform', 'DER', '-in', join(folder, 'pades.der'), '-content', join(folder, 'pades-covered'),
-    '-CAfile', join(folder, 'cert.pem'), '-purpose', 'any', '-out', '/dev/null'], { stdio: 'pipe' });
+    '-CAfile', join(folder, 'cert.pem'), '-purpose', 'any', '-out', devNull], { stdio: 'pipe' });
   console.log('PASS: local PAdES-B-B: format choice, PDF pre-check, approval, .signed.pdf download; embedded CMS over ByteRange verified by OpenSSL');
   if (process.env.DSS_VALIDATOR) {
     const [dssResult] = JSON.parse(execFileSync('java', ['-cp', `${process.env.DSS_VALIDATOR}/classes:${process.env.DSS_VALIDATOR}/lib/*`, 'Validate', signedPdfPath, join(folder, 'cert.pem')], { encoding: 'utf8' })).signatures;

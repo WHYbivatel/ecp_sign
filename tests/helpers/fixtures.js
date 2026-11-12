@@ -16,8 +16,16 @@ export const OPENSSL_PROFILES = {
   'pbe-3des-sha1-mac': ['-keypbe', 'PBE-SHA1-3DES', '-certpbe', 'PBE-SHA1-3DES', '-macalg', 'sha1'],
   nomac: ['-nomac']
 };
-// Passwords travel to OpenSSL through the environment to keep spaces and Unicode exact.
+// Passwords travel to Java through the environment to keep spaces and Unicode exact.
 export const opensslPassword = password => ({ stdio: 'pipe', env: { ...process.env, TEGIN_TEST_P12_PASSWORD: password } });
+// OpenSSL on Windows reads environment variables in the ANSI code page; a UTF-8 file keeps the password exact.
+// An empty password cannot be read from a file and has nothing to lose in transit.
+export function opensslPassFile(folder, password) {
+  if (!password) return 'pass:';
+  const path = join(folder, 'password.txt');
+  writeFileSync(path, password);
+  return `file:${path}`;
+}
 
 export function rsaFixture({ purpose, keyUsage, password = PASSWORD, profile = 'default', subject = '/CN=Tegin disposable test', keySpec = 'rsa:2048', validity } = {}) {
   if (purpose && !['clientAuth', 'emailProtection'].includes(purpose)) throw new Error('Unsupported fixture purpose');
@@ -37,7 +45,7 @@ export function rsaFixture({ purpose, keyUsage, password = PASSWORD, profile = '
       writeFileSync(join(folder, 'cert.pem'), forge.pki.certificateToPem(certificate));
     }
     execFileSync('openssl', ['pkcs12', '-export', ...OPENSSL_PROFILES[profile], '-inkey', join(folder, 'key.pem'), '-in', join(folder, 'cert.pem'),
-      '-out', join(folder, 'key.p12'), '-passout', 'env:TEGIN_TEST_P12_PASSWORD'], opensslPassword(password));
+      '-out', join(folder, 'key.p12'), '-passout', opensslPassFile(folder, password)], { stdio: 'pipe' });
     return { container: new Uint8Array(readFileSync(join(folder, 'key.p12'))),
       certificate: readFileSync(join(folder, 'cert.pem'), 'utf8'), publicKey: readFileSync(join(folder, 'key.pem'), 'utf8') };
   } finally { rmSync(folder, { recursive: true, force: true }); }

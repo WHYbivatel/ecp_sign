@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { rsaFixture, gostFixture, pkcs12Container, pkcs12FromContents, encryptedSafe, shroudedKeyBag, certificateBag, integerBytes, opensslPassword, PASSWORD } from './helpers/fixtures.js';
+import { rsaFixture, gostFixture, pkcs12Container, pkcs12FromContents, encryptedSafe, shroudedKeyBag, certificateBag, integerBytes, opensslPassFile, PASSWORD } from './helpers/fixtures.js';
 import { openContainer, GostSign } from '../extension/crypto/signer.js';
 import { CONTAINER_FAILURES } from '../extension/lib/pkcs12.js';
 import { forge, A, parse, der, bytes, binary, oid } from '../extension/crypto/encoding.js';
@@ -24,8 +24,8 @@ function opensslOpens(container, password, profile) {
   const folder = mkdtempSync(join(tmpdir(), 'tegin-p12-check-'));
   try {
     writeFileSync(join(folder, 'key.p12'), container);
-    execFileSync('openssl', ['pkcs12', '-in', join(folder, 'key.p12'), '-nodes', '-passin', 'env:TEGIN_TEST_P12_PASSWORD',
-      '-out', join(folder, 'out.pem'), ...(profile === 'legacy' ? ['-legacy'] : [])], opensslPassword(password));
+    execFileSync('openssl', ['pkcs12', '-in', join(folder, 'key.p12'), '-nodes', '-passin', opensslPassFile(folder, password),
+      '-out', join(folder, 'out.pem'), ...(profile === 'legacy' ? ['-legacy'] : [])], { stdio: 'pipe' });
     return true;
   } catch { return false; } finally { rmSync(folder, { recursive: true, force: true }); }
 }
@@ -217,8 +217,8 @@ test('unsupported integrity and encryption algorithms are reported as such, not 
       [['-v2', 'aes-256-cbc', '-v2prf', 'hmacWithSHA224'], '1.2.840.113549.2.8'],
       [['-v2', 'camellia-256-cbc'], '1.2.392.200011.61.1.1.1.4']
     ]) {
-      execFileSync('openssl', ['pkcs8', '-topk8', '-in', join(folder, 'key.pem'), ...args, '-passout', 'env:TEGIN_TEST_P12_PASSWORD',
-        '-outform', 'DER', '-out', join(folder, 'key.der')], opensslPassword(PASSWORDS.cyrillic));
+      execFileSync('openssl', ['pkcs8', '-topk8', '-in', join(folder, 'key.pem'), ...args, '-passout', opensslPassFile(folder, PASSWORDS.cyrillic),
+        '-outform', 'DER', '-out', join(folder, 'key.der')], { stdio: 'pipe' });
       const encrypted = A.fromDer(binary(readFileSync(join(folder, 'key.der'))));
       const container = pkcs12Container([shroudedKeyBag(encrypted), certificateBag(certificate)], PASSWORDS.cyrillic);
       await assert.rejects(openContainer(container, PASSWORDS.cyrillic), error => {

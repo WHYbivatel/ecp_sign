@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, devNull } from 'node:os';
 import { PDFDocument, PDFName, PDFString, PDFHexString, PDFDict, StandardFonts } from 'pdf-lib';
 import { rsaFixture, gostFixture, PASSWORD } from './helpers/fixtures.js';
 import { openContainer } from '../extension/crypto/signer.js';
@@ -84,11 +84,11 @@ test('PAdES-B-B: ByteRange covers the whole file except /Contents, CAdES detache
   try {
     writeFileSync(join(folder, 'covered'), covered); writeFileSync(join(folder, 'cms.der'), cms); writeFileSync(join(folder, 'cert.pem'), fixture.certificate);
     execFileSync('openssl', ['cms', '-verify', '-binary', '-inform', 'DER', '-in', join(folder, 'cms.der'), '-content', join(folder, 'covered'),
-      '-CAfile', join(folder, 'cert.pem'), '-purpose', 'any', '-out', '/dev/null'], { stdio: 'pipe' });
+      '-CAfile', join(folder, 'cert.pem'), '-purpose', 'any', '-out', devNull], { stdio: 'pipe' });
     const tampered = Buffer.from(covered); tampered[Math.floor(tampered.length / 2)] ^= 1;
     writeFileSync(join(folder, 'covered'), tampered);
     assert.throws(() => execFileSync('openssl', ['cms', '-verify', '-binary', '-inform', 'DER', '-in', join(folder, 'cms.der'), '-content', join(folder, 'covered'),
-      '-CAfile', join(folder, 'cert.pem'), '-purpose', 'any', '-out', '/dev/null'], { stdio: 'pipe' }));
+      '-CAfile', join(folder, 'cert.pem'), '-purpose', 'any', '-out', devNull], { stdio: 'pipe' }));
     await assert.rejects(verifyCms(new Uint8Array(cms), { detached: new Uint8Array(tampered) }), /изменён/);
   } finally { rmSync(folder, { recursive: true, force: true }); }
 });

@@ -33,12 +33,23 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = macOS ]; then echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"; fi
-          if [ "$RUNNER_OS" = Windows ] && [ -d "/c/Program Files/OpenSSL/bin" ]; then echo "C:\\Program Files\\OpenSSL\\bin" >> "$GITHUB_PATH"; fi
+          # Windows: the first OpenSSL 3 that ships the legacy provider (needed for -legacy PKCS#12 fixtures).
+          if [ "$RUNNER_OS" = Windows ]; then
+            for dir in "/c/Program Files/OpenSSL" "/c/Program Files/Git/mingw64"; do
+              module=$(find "$dir" -iname legacy.dll 2>/dev/null | head -1)
+              if [ -n "$module" ] && [ -x "$dir/bin/openssl.exe" ]; then
+                cygpath -w "$dir/bin" >> "$GITHUB_PATH"
+                echo "OPENSSL_MODULES=$(cygpath -w "$(dirname "$module")")" >> "$GITHUB_ENV"
+                break
+              fi
+            done
+          fi
       - name: Environment
         shell: bash
         run: |
           node -p '`node ${process.version} ${process.platform} ${process.arch}`'
           openssl version
+          openssl list -providers -provider legacy -provider default || true
       - run: npm ci
       - run: npm test
       - run: npm run build
@@ -78,7 +89,17 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = macOS ]; then echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"; fi
-          if [ "$RUNNER_OS" = Windows ] && [ -d "/c/Program Files/OpenSSL/bin" ]; then echo "C:\\Program Files\\OpenSSL\\bin" >> "$GITHUB_PATH"; fi
+          # Windows: the first OpenSSL 3 that ships the legacy provider (needed for -legacy PKCS#12 fixtures).
+          if [ "$RUNNER_OS" = Windows ]; then
+            for dir in "/c/Program Files/OpenSSL" "/c/Program Files/Git/mingw64"; do
+              module=$(find "$dir" -iname legacy.dll 2>/dev/null | head -1)
+              if [ -n "$module" ] && [ -x "$dir/bin/openssl.exe" ]; then
+                cygpath -w "$dir/bin" >> "$GITHUB_PATH"
+                echo "OPENSSL_MODULES=$(cygpath -w "$(dirname "$module")")" >> "$GITHUB_ENV"
+                break
+              fi
+            done
+          fi
       - run: npm ci
       - name: Browser
         shell: bash
