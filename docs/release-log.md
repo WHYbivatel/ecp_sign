@@ -6,8 +6,9 @@
 
 ## После `dd40b5e`: не опубликовано
 
-Коммиты в `codex/nca-key-issuance`, локально (push в `WHYbivatel/ecp_sign` запрещён, 403). На
-сайте по-прежнему `dd40b5e`. Проверка на `f748a81`: `npm test` 120/120, `tests/e2e.mjs` 38/38,
+Коммиты в `codex/nca-key-issuance`. Ветка отправлена в `WHYbivatel/ecp_sign` по SSH владельца
+12.11.2026 (без слияния в `main`, без публикации). На сайте по-прежнему `dd40b5e`. CI на
+`e79613f`: все 12 задач зелёные ([прогон 43203864358](https://github.com/WHYbivatel/ecp_sign/actions/runs/43203864358)). Проверка на `f748a81`: `npm test` 120/120, `tests/e2e.mjs` 38/38,
 `tests/e2e-issuance.mjs` и `tests/e2e-revocation.mjs` — код выхода 0, Firefox 160 5/5 (Linux x64).
 
 | Коммит | Изменение | Проверка |
@@ -24,6 +25,10 @@
 | `05db357` | `keyType` Common Utils фильтрует ключи по правилу NCALayer | unit, E2E |
 | `9ae3817` | `getKeyInfo` с полями и форматами NCALayer | эталон официальных классов на синтетических сертификатах |
 | `f748a81` | Эталон NCALayer и статус расхождений | документация |
+| `6ce44e5`, `041b629` | Журналы и матрица; описание подключения нового сайта | документация |
+| `fbfdabe` | Формы ответа Basics из официального `PKIExtras.sign`; контракт Tegin сохранён | `basics-results.test.js` |
+| `4cdf8b7`, `3b6eb20` | Тесты на Windows (пароли OpenSSL через файл UTF-8, `os.devNull`, legacy-провайдер); сборка перед полным E2E | CI |
+| `b2e0dd1`, `e79613f` | Две нестабильности E2E выпуска (Docs Offline в Chrome, гонка «Конфликт версий») | CI, все 12 задач |
 
 Изменения ответов Common Utils (`a293148`, `05db357`, `9ae3817`) видны сайтам. До публикации их
 нужно проверить на сайтах, которые уже работают с Tegin через Common Utils.
