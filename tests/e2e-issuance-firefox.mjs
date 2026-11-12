@@ -43,13 +43,14 @@ const statusHtml = () => statusPage.replace('{{COUNT}}', String(issued.length))
   .replace('{{PEMS}}', issued.map((pem, index) => `<div id="hiddenCertrequests:${index}:pem" hidden>${pem}</div>`).join('\n'));
 
 // Extension windows are privileged browsing contexts: WebDriver BiDi reaches them only with system access (test profile only).
-const browser = await puppeteer.launch({ browser: 'firefox', executablePath, headless: true, userDataDir: join(folder, 'profile'),
+const launch = () => puppeteer.launch({ browser: 'firefox', executablePath, headless: true, userDataDir: join(folder, 'profile'),
   env: { ...process.env, MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: '1' },
   extraPrefsFirefox: {
     'extensions.webextensions.uuids': JSON.stringify({ [ADDON_ID]: uuid }),
     'network.dns.localDomains': [...NUC_HOSTS, LOOKALIKE].join(','),
     'browser.download.folderList': 2, 'browser.download.dir': join(folder, 'downloads'), 'browser.download.useDownloadDir': true
   } });
+let browser = await launch();
 
 async function portal(url, { adapter = true } = {}) {
   const page = await browser.newPage();
@@ -59,7 +60,8 @@ async function portal(url, { adapter = true } = {}) {
     const target = new URL(request.url());
     if (![new URL(url).host, 'did.pki.gov.kz'].includes(target.host)) { escaped.push(target.href); return request.abort(); }
     if (request.method() === 'POST') { posts.push({ path: target.pathname, body: await request.fetchPostData() }); return request.respond({ status: 204 }); }
-    request.respond({ status: 200, contentType: 'text/html; charset=utf-8', body: target.pathname.includes('/status') ? statusHtml() : createPage });
+    const body = target.pathname.includes('/status') ? statusHtml() : target.pathname.includes('/frame') ? '<!doctype html><title>frame</title>' : createPage;
+    request.respond({ status: 200, contentType: 'text/html; charset=utf-8', body });
   });
   await page.goto(url);
   if (adapter) await page.waitForFunction(() => window.WebSocket.__ncaBrowserAdapter === true);
@@ -116,11 +118,25 @@ try {
   await new Promise(done => setTimeout(done, 500));
   assert.equal((await browser.pages()).length, windows);
   await lookalike.close();
+  // A NUC page inside a frame of the portal is refused as well: the request comes from the frame, not the top page.
+  const framed = await portal(CREATE);
+  await framed.evaluate(() => { document.getElementById('frame').src = 'https://did.pki.gov.kz/frame'; });
+  let frame;
+  for (let i = 0; i < 200 && !frame; i++) { frame = framed.frames().find(item => item.url().endsWith('/frame')); if (!frame) await new Promise(done => setTimeout(done, 50)); }
+  assert.ok(frame, 'the frame did not load');
+  await frame.waitForFunction(() => window.WebSocket.__ncaBrowserAdapter === true);
+  const framedWindows = (await browser.pages()).length;
+  const fromFrame = await frame.evaluate(() => new Promise(done => { const socket = new WebSocket('wss://127.0.0.1:13579'); socket.onopen = () => { socket.onmessage = event => done(JSON.parse(event.data));
+    socket.send(JSON.stringify({ module: 'kz.gov.pki.knca.basics', method: 'generateCsr', class: 'PKIEssentials', args: { dn: { '2.5.4.3': 'X' }, params: [{ algorithm: 'ECGOST3410-2015', length: 512 }] } })); }; }));
+  assert.equal(fromFrame.code, 'ORIGIN_NOT_ALLOWED');
+  await new Promise(done => setTimeout(done, 500));
+  assert.equal((await browser.pages()).length, framedWindows);
+  await framed.close();
 
   const page = await portal(CREATE);
   let popup = await startPopup(page, 'createCertRequest', 'signing/issue.html');
   assert.match(await popup.evaluate(() => browser.runtime.getManifest().name), /test issuance build/);
-  console.log('PASS: the Firefox build loads as a WebExtension; a look-alike host is refused without a window; on the portal the NCALayer adapter opens its window');
+  console.log('PASS: the Firefox build loads as a WebExtension; a look-alike host and a portal frame are refused without a window; on the portal the NCALayer adapter opens its window');
   await visible(popup, '#request-panel:not([hidden])');
   const shown = await textOf(popup, '#subject');
   for (const value of ['ТЕСТОВ ТЕСТ', 'IIN000000000000', 'ТОО «ҚАЗАҚ СИНТЕТИКА»']) assert.ok(shown.includes(value), value);
@@ -192,7 +208,8 @@ try {
   assert.deepEqual(await answer(status), { status: true, body: { result: true } });
   assert.equal(await status.evaluate(() => window.statusChanged), true);
   await popup.waitForSelector('#forget:not([hidden])', { timeout: 15000 });
-  assert.equal((await records(popup))[0].status, 'installed');
+  const installedRecords = await records(popup);
+  assert.equal(installedRecords[0].status, 'installed');
   await popup.close();
   const reopened = await openContainer(new Uint8Array(p12.bytes), PASSWORD);
   try { assert.equal(reopened.info.raw, der(parse(leaf.der))); } finally { reopened.destroy(); }
@@ -235,6 +252,19 @@ try {
     assert.throws(() => kalkan('Verify', 'cms', cmsPath));
     console.log('PASS: Kalkan opens the Firefox-saved .p12 and verifies the CMS it signed; a changed document is rejected');
   } else console.log('SKIP: Kalkan check of the Firefox-saved .p12 (set NCA_KALKAN_JARS)');
+
+  // Restart on the same profile. The add-on is temporary here, so Firefox removes it on exit and it is installed again
+  // with the same ID and moz-extension UUID; this records what storage.local keeps in that case.
+  await browser.close();
+  browser = await launch();
+  assert.equal(await browser.installExtension(extension), ADDON_ID);
+  const afterRestart = await portal(CREATE);
+  popup = await startPopup(afterRestart, 'createCertRequest', 'signing/issue.html');
+  const restored = await records(popup);
+  console.log(`INFO: after a restart with the add-on reinstalled: ${restored.length} of ${installedRecords.length} application records in storage.local`);
+  assert.deepEqual(restored, installedRecords);
+  await popup.close(); await afterRestart.close();
+  console.log('PASS: Firefox restarted on the same profile; the reinstalled add-on with the same ID keeps the application records in storage.local');
 
   assert.deepEqual(escaped, []);
   assert.deepEqual(errors, []);

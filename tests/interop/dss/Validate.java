@@ -82,6 +82,7 @@ public class Validate {
         .append("\"byteRangeValid\":").append(revision != null && revision.isSignatureByteRangeValid()).append(',')
         .append("\"modifications\":").append(revision != null && revision.arePdfModificationsDetected()).append(',')
         .append("\"objectModifications\":").append(revision != null && revision.arePdfObjectModificationsDetected()).append(',')
+        .append("\"docMdp\":").append(q(revision == null ? null : revision.getDocMDPPermissions())).append(',')
         .append("\"fieldNames\":").append(names(revision == null ? null : revision.getSignatureFieldNames())).append(',')
         .append("\"signatureOrFormFillChanges\":").append(revision == null ? 0 : count(revision.getPdfSignatureOrFormFillChanges())).append(',')
         .append("\"annotationChanges\":").append(revision == null ? 0 : count(revision.getPdfAnnotationChanges())).append(',')

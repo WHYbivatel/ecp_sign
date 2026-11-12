@@ -1,14 +1,16 @@
 // Checks the packaged archives themselves (dist/tegin-<target>-<version>.zip from `npm run package`), not the
 // unpacked dist/ folders the E2E tests load: version, manifest, every referenced file present, no test build,
 // no source maps, keys or development files, no remote scripts, contents byte-identical to dist/<target>, and
-// SHA-256 equal to dist/checksums.json. With --smoke the Chromium archive is unpacked into a temporary folder,
+// SHA-256 equal to dist/checksums.json; packing again gives the same bytes; the AMO source archive is the committed
+// tree without keys or build output. With --smoke the Chromium archive is unpacked into a temporary folder,
 // loaded into Chromium, and every extension page must open without a script error or CSP violation.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFile, readdir, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { readFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname, posix } from 'node:path';
-import { zipEntries } from './lib/zip.mjs';
+import { execFileSync } from 'node:child_process';
+import { ZIP_DATE, filesIn, zipEntries, zipFolder } from './lib/zip.mjs';
 
 const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -17,16 +19,6 @@ const checksums = JSON.parse(await readFile(join(dist, 'checksums.json'), 'utf8'
 const FORBIDDEN = [/\.map$/, /(^|\/)\.[^/]+$/, /(^|\/)(node_modules|tests?|\.git)\//, /\.(p12|pfx|pem|key|der|crt|cer|p7s|env|log)$/i, /\.test\.js$/, /(^|\/)package(-lock)?\.json$/];
 const PAGES = ['index.html', 'modules/index.html', 'keys/index.html', 'password/index.html', 'signing/approve.html', 'signing/issue.html'];
 const MAX_BYTES = 4 * 1024 * 1024;
-
-async function walk(folder, prefix = '') {
-  const files = [];
-  for (const entry of await readdir(folder, { withFileTypes: true })) {
-    const name = prefix + entry.name;
-    if (entry.isDirectory()) files.push(...await walk(join(folder, entry.name), `${name}/`));
-    else files.push(name);
-  }
-  return files;
-}
 
 function referenced(manifest) {
   const files = new Set(['manifest.json', ...Object.values(manifest.icons || {}), ...Object.values(manifest.action?.default_icon || {})]);
@@ -81,12 +73,32 @@ for (const target of ['chromium', 'firefox']) {
     assert.doesNotMatch(code, /importScripts\(\s*["']https?:|import\(\s*["']https?:/, `${name}: ${entry} loads remote code`);
   }
 
-  const built = (await walk(join(dist, target))).sort();
+  const built = await filesIn(join(dist, target));
   assert.deepEqual([...names].sort(), built, `${name}: file list differs from dist/${target}`);
   for (const entry of names) assert.ok(zip.read(entry).equals(await readFile(join(dist, target, entry))), `${name}: ${entry} differs from dist/${target}`);
+  assert.deepEqual(names, [...names].sort(), `${name}: entries are not in sorted order`);
+  for (const entry of names) assert.deepEqual(zip.stamp(entry), { time: 0, date: ZIP_DATE }, `${name}: ${entry} carries a file time`);
+  assert.ok((await zipFolder(join(dist, target))).equals(bytes), `${name}: packing dist/${target} again gives different bytes`);
   results[target] = { name, bytes: bytes.length, files: names.length, sha256: checksums[name] };
-  console.log(`PASS: ${name}: ${names.length} files, ${bytes.length} bytes, SHA-256 ${checksums[name].slice(0, 16)}…; manifest ${manifest.version}, every referenced file present, no test settings, development files or remote scripts, identical to dist/${target}`);
+  console.log(`PASS: ${name}: ${names.length} files, ${bytes.length} bytes, SHA-256 ${checksums[name].slice(0, 16)}…; manifest ${manifest.version}, every referenced file present, no test settings, development files or remote scripts, identical to dist/${target}; sorted entries with a fixed time, packing again gives the same bytes`);
 }
+
+// Source archive for AMO review: the committed tree of HEAD, reproducible with git archive, without keys or build output.
+const sourceName = `tegin-source-${version}.zip`;
+const sourceBytes = await readFile(join(dist, sourceName));
+assert.equal(sha256(sourceBytes), checksums[sourceName], `${sourceName}: SHA-256 differs from dist/checksums.json`);
+const sourcePrefix = `tegin-source-${version}/`;
+const sourceFiles = zipEntries(sourceBytes).names().filter(entry => !entry.endsWith('/'));
+for (const entry of sourceFiles) {
+  assert.ok(entry.startsWith(sourcePrefix), `${sourceName}: ${entry} outside ${sourcePrefix}`);
+  const path = entry.slice(sourcePrefix.length);
+  assert.doesNotMatch(path, /\.(p12|pfx|env)$|(^|\/)\.env(\.|$)|^dist\/|(^|\/)node_modules\//i, `${sourceName}: ${path} must not be in the source archive`);
+}
+for (const required of ['package.json', 'package-lock.json', 'scripts/build.mjs', 'extension/manifest.json', 'README.md']) assert.ok(sourceFiles.includes(sourcePrefix + required), `${sourceName}: ${required} missing`);
+const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+const again = execFileSync('git', ['archive', '--format=zip', `--prefix=${sourcePrefix}`, commit], { maxBuffer: 64 * 1024 * 1024 });
+assert.ok(again.equals(sourceBytes), `${sourceName}: differs from git archive of ${commit.slice(0, 12)}`);
+console.log(`PASS: ${sourceName}: ${sourceFiles.length} files of commit ${commit.slice(0, 12)}, SHA-256 ${checksums[sourceName].slice(0, 16)}…; no .p12/.pfx/.env, dist/ or node_modules/; git archive gives the same bytes`);
 
 if (process.argv.includes('--smoke')) {
   const { launchExtension, extensionWorker } = await import('../tests/helpers/browser.js');

@@ -21,6 +21,7 @@ import { PDFDocument } from 'pdf-lib';
 import { catalog } from '../extension/modules/catalog.js';
 import { modules as moduleRegistry } from '../extension/modules/registry.js';
 
+if (process.env.TEGIN_REQUIRE_DSS && !process.env.DSS_VALIDATOR) throw new Error('TEGIN_REQUIRE_DSS is set, but DSS_VALIDATOR is empty: the browser PDFs would skip EU DSS and pyHanko');
 const folder = mkdtempSync(join(tmpdir(), 'ncabrowser-e2e-'));
 const extension = resolve('dist/chromium');
 // Common Utils shows only signature or authentication keys, so its keys carry NCALayer key usages.

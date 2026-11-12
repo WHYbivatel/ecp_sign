@@ -205,8 +205,10 @@ jobs:
           javac -cp "$RUNNER_TEMP/dss/lib/*" -d "$RUNNER_TEMP/dss/classes" tests/interop/dss/Validate.java
           echo "DSS_VALIDATOR=$RUNNER_TEMP/dss" >> "$GITHUB_ENV"
       # RSA 2048/3072/4096, second signatures in both directions, tampering, hybrid references,
-      # unsigned revisions, FieldMDP /Lock with and without /P.
+      # unsigned revisions, FieldMDP /Lock with and without /P, pyHanko certification (DocMDP) signatures.
       - run: node tests/pades-crosscheck.mjs
+      # CAdES-T/LT/LTA from the extension: timestamps, revocation values, archive timestamps, tampering.
+      - run: node tests/cades-lt-crosscheck.mjs
 
   xml-official:
     name: XML against official NCALayer code · ubuntu
@@ -234,6 +236,10 @@ jobs:
       - run: node tests/kalkan-crosscheck.mjs
       # XMLUtil.verifyXmlSignature: NURSign xml contract, XPath co-signing RSA + GOST-512.
       - run: node tests/nursign-xml-crosscheck.mjs
+      # KalkanProvider opens Tegin PKCS#12 (RSA, GOST, Cyrillic passwords, PBES2 variants).
+      - run: node tests/kalkan-pkcs12.mjs
+      # Kalkan reads Tegin certificate requests the same way as NCALayer reference requests.
+      - run: node tests/kalkan-issuance.mjs
       # An installed NCALayer updates itself to the versions in the signed catalog (XMLDSig 0.5.2, util 0.9.2).
       - name: The same against the bundles an installed NCALayer updates to
         run: |
@@ -272,14 +278,31 @@ jobs:
     needs: unit
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      TEGIN_REQUIRE_DSS: 1
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - run: npm ci
       - run: npx playwright install --with-deps chromium
+      - run: pip install pyHanko==0.38.0 pyhanko-certvalidator==0.33.0 asn1crypto==1.5.1
+      # PDFs signed in the browser are also checked by EU DSS and pyHanko (tests/e2e.mjs).
+      - name: EU DSS 6.5.1 validator (tests/interop/dss)
+        run: |
+          mvn -B -q -f tests/interop/dss/pom.xml dependency:copy-dependencies -DoutputDirectory="$RUNNER_TEMP/dss/lib"
+          javac -cp "$RUNNER_TEMP/dss/lib/*" -d "$RUNNER_TEMP/dss/classes" tests/interop/dss/Validate.java
+          echo "DSS_VALIDATOR=$RUNNER_TEMP/dss" >> "$GITHUB_ENV"
       - run: npm run build
       - run: npm run test:e2e
       - name: Screenshots on failure

@@ -6,6 +6,7 @@
   encrypt  <file.pdf> <out.pdf>            -> RC4/AES encrypted copy (user password)
   sign     <file.pdf> <out.pdf> <key.pem> <cert.pem> -> PAdES signature made by pyHanko itself
   sign-locked <file.pdf> <out.pdf> <key.pem> <cert.pem> <field> <1|2|3|-> -> same, field /Lock over <field>, optional /P
+  certify  <file.pdf> <out.pdf> <key.pem> <cert.pem> <1|2|3> -> certification signature with DocMDP permission
   fill     <file.pdf> <out.pdf> <field> <value>  -> incremental update that changes a text field value
 """
 import asyncio
@@ -56,7 +57,9 @@ def validate(path, cert_path, mode='strict'):
                 'intact': status.intact, 'valid': status.valid, 'trusted': status.trusted,
                 'coverage': status.coverage.name if status.coverage else None,
                 'modificationLevel': status.modification_level.name if status.modification_level else None,
-                'docmdpOk': status.docmdp_ok, 'bottomLine': status.bottom_line,
+                'docmdpOk': status.docmdp_ok,
+                'certification': embedded.docmdp_level.name if embedded.docmdp_level else None,
+                'bottomLine': status.bottom_line,
                 'adesBasic': ades.ades_subindic.status.name if hasattr(ades.ades_subindic, 'status') else str(ades.ades_subindic),
                 'adesSubindication': ades.ades_subindic.name,
                 'signedAttributes': attributes,
@@ -102,6 +105,16 @@ def sign_locked(path, out, key, cert, field, permission):
             signers.sign_pdf(writer, signers.PdfSignatureMetadata(field_name='Locked', subfilter=SigSeedSubFilter.PADES), signer=signer, output=target)
 
 
+def certify(path, out, key, cert, permission):
+    """Certification (author) signature with DocMDP <permission>: 1 no changes, 2 form filling, 3 annotations."""
+    signer = signers.SimpleSigner.load(key, cert)
+    meta = signers.PdfSignatureMetadata(field_name='Certified', subfilter=SigSeedSubFilter.PADES, certify=True, docmdp_permissions=MDPPerm(int(permission)))
+    with open(path, 'rb') as stream:
+        writer = IncrementalPdfFileWriter(stream, strict=True)
+        with open(out, 'wb') as target:
+            signers.sign_pdf(writer, meta, signer=signer, output=target)
+
+
 def fill(path, out, field, value):
     """Incremental update that changes the value of a text field."""
     with open(path, 'rb') as stream:
@@ -119,4 +132,4 @@ def fill(path, out, field, value):
 
 if __name__ == '__main__':
     command, *args = sys.argv[1:]
-    {'validate': validate, 'modify': modify, 'encrypt': encrypt, 'sign': sign, 'sign-locked': sign_locked, 'fill': fill}[command](*args)
+    {'validate': validate, 'modify': modify, 'encrypt': encrypt, 'sign': sign, 'sign-locked': sign_locked, 'certify': certify, 'fill': fill}[command](*args)

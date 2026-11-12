@@ -200,5 +200,23 @@ try {
     // DSS 6.5.1 classifies the change as form filling and does not apply the /Lock; recorded, not relied on.
     assert.ok(lockedDss[0].objectModifications && lockedDss[0].signatureOrFormFillChanges > 0, JSON.stringify(lockedDss[0]));
     console.log(`PASS: locked field changed after both signatures: pyHanko marks the locking signature (${lockedHanko[0].modificationLevel}, bottom line false) and sees form filling after Tegin's; DSS does not apply /Lock: ${lockedDss.map(item => `${item.indication}, form-fill changes ${item.signatureOrFormFillChanges}`).join(' / ')}`);
+
+    // Certification (DocMDP) signatures made by pyHanko: both validators see them, Tegin refuses without touching the bytes.
+    for (const [permission, hankoLevel, dssLevel] of [['1', 'NO_CHANGES', 'NO_CHANGE_PERMITTED'], ['2', 'FILL_FORMS', 'MINIMAL_CHANGES_PERMITTED'], ['3', 'ANNOTATE', 'CHANGES_PERMITTED']]) {
+      const certified = file(`certified-${permission}.pdf`);
+      hanko('certify', file('form.pdf'), certified, file('key.pem'), cert, permission);
+      const [dssCertified, ...dssExtra] = runDss(certified, cert), [hankoCertified, ...hankoExtra] = runHanko(certified, cert);
+      assert.equal(dssExtra.length + hankoExtra.length, 0);
+      assert.equal(dssCertified.indication, 'TOTAL_PASSED', JSON.stringify(dssCertified));
+      assert.equal(dssCertified.docMdp, dssLevel, JSON.stringify(dssCertified));
+      assert.ok(hankoCertified.intact && hankoCertified.valid && hankoCertified.bottomLine, JSON.stringify(hankoCertified));
+      assert.equal(hankoCertified.certification, hankoLevel, JSON.stringify(hankoCertified));
+      const bytes = new Uint8Array(readFileSync(certified)), copy = bytes.slice();
+      await assert.rejects(inspectPdf(bytes), error => error.code === 'PDF_CERTIFIED');
+      await assert.rejects(signPades(signer, bytes), error => error.code === 'PDF_CERTIFIED');
+      assert.deepEqual(bytes, copy);
+      assert.deepEqual(new Uint8Array(readFileSync(certified)), copy);
+      console.log(`PASS: pyHanko certification signature, DocMDP /P ${permission}: DSS ${dssCertified.indication}, ${dssCertified.docMdp}; pyHanko ${hankoCertified.certification}; Tegin refuses with PDF_CERTIFIED, input bytes unchanged`);
+    }
   }
 } finally { rmSync(folder, { recursive: true, force: true }); }
