@@ -10,6 +10,8 @@
     "test:e2e": "node tests/e2e.mjs && node tests/e2e-revocation.mjs && node tests/e2e-issuance.mjs",
     "test:e2e:firefox": "node tests/e2e-issuance-firefox.mjs && node tests/e2e-revocation-firefox.mjs && node tests/e2e-password-firefox.mjs",
     "package": "npm run build && node scripts/package.mjs",
+    "verify:package": "npm run package && node scripts/verify-package.mjs --smoke",
+    "check:trust": "node scripts/check-trust.mjs",
     "test:tsp": "node tests/tsp-live.mjs",
     "test:revocation-live": "node tests/revocation-live.mjs"
   },

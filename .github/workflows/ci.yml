@@ -20,7 +20,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # macOS runs in unit-macos: a macOS runner that is not acquired must not block the jobs below.
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -55,6 +56,24 @@ jobs:
       - run: npm run build
       - name: Release metadata
         run: node website/scripts/check-releases.mjs
+      - name: Bundled NCA certificates (offline)
+        run: node scripts/check-trust.mjs
+
+  unit-macos:
+    name: unit · macos-latest
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: OpenSSL 3 first in PATH
+        run: echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
 
   issuance-browsers:
     name: issuance E2E · ${{ matrix.browser }} · ${{ matrix.os }}
@@ -158,6 +177,59 @@ jobs:
       - run: npm ci
       # Software PKCS#11 token as a stand-in: protocol, PIN, cancel, removal; no physical device.
       - run: node tests/token-softhsm.mjs
+
+  xml-official:
+    name: XML against official NCALayer code · ubuntu
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm ci
+      - name: Kalkan, knca_provider_util and slf4j (official NCALayer archive, pinned SHA-256)
+        uses: actions/cache@v4
+        with:
+          path: .kalkan
+          key: kalkan-xml-0.7.8-5588f9ae-72c273d3-613e8ecf-49c4af31
+      - run: node scripts/fetch-kalkan.mjs .kalkan --xml >> "$GITHUB_ENV"
+      # Kalkan XMLDSig: CMS/CAdES, whole-document and XPath XML, co-signatures, portal payloads.
+      - run: node tests/kalkan-crosscheck.mjs
+      # XMLUtil.verifyXmlSignature: NURSign xml contract, XPath co-signing RSA + GOST-512.
+      - run: node tests/nursign-xml-crosscheck.mjs
+
+  package:
+    name: packaged archives · ubuntu
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run package
+      - name: Archives checked as shipped; Chromium archive loaded unpacked
+        run: node scripts/verify-package.mjs --smoke
+      - name: Firefox archive through the AMO validator
+        run: npx --yes addons-linter@10.15.0 dist/tegin-firefox-*.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tegin-packages-${{ github.sha }}
+          path: |
+            dist/tegin-*.zip
+            dist/checksums.json
+          retention-days: 14
 
   full-e2e-linux:
     name: full E2E · chromium · ubuntu
