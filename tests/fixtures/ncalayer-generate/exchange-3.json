@@ -1,0 +1,51 @@
+{
+  "ncalayer": "1.4",
+  "storage": {
+    "type": "PKCS12",
+    "folder": "/tmp/ncl/out2"
+  },
+  "request": {
+    "module": "kz.gov.pki.knca.basics",
+    "method": "generateCsr",
+    "class": "PKIEssentials",
+    "args": {
+      "allowedStorages": [
+        "PKCS12"
+      ],
+      "defaultPassword": "Synthetic1Default",
+      "dn": {
+        "2.5.4.65": "PSEUDO",
+        "0.9.2342.19200300.100.1.25": "example",
+        "2.5.4.46": "QUALIFIER",
+        "2.5.4.17": "050000",
+        "2.5.4.9": "УЛИЦА",
+        "2.5.4.11": "BIN000000000000",
+        "2.5.4.10": "ТОО «ҚАЗАҚ СИНТЕТИКА»",
+        "2.5.4.6": "KZ",
+        "2.5.4.5": "IIN000000000000",
+        "2.5.4.4": "ТЕСТОВ",
+        "2.5.4.3": "ТЕСТОВ ТЕСТ"
+      },
+      "email": "",
+      "subjectAltNames": "",
+      "params": [
+        {
+          "algorithm": "1.2.398.3.10.1.1.2.3.2",
+          "length": 512
+        }
+      ],
+      "locale": "ru",
+      "omittedKeyIds": [
+        ""
+      ]
+    }
+  },
+  "response": {
+    "body": {
+      "pems": [
+        "-----BEGIN CERTIFICATE REQUEST-----\nMIIClzCCAf8CAQAwggEPMRcwFQYKCZImiZPyLGQBGRYHZXhhbXBsZTEeMBwGA1UE\nAwwV0KLQldCh0KLQntCSINCi0JXQodCiMRUwEwYDVQQEDAzQotCV0KHQotCe0JIx\nGDAWBgNVBAUTD0lJTjAwMDAwMDAwMDAwMDELMAkGA1UEBhMCS1oxEzARBgNVBAkM\nCtCj0JvQmNCm0JAxMTAvBgNVBAoMKNCi0J7QniDCq9Ka0JDQl9CQ0pog0KHQmNCd\n0KLQldCi0JjQmtCQwrsxGDAWBgNVBAsMD0JJTjAwMDAwMDAwMDAwMDEPMA0GA1UE\nEQwGMDUwMDAwMRIwEAYDVQQuEwlRVUFMSUZJRVIxDzANBgNVBEEMBlBTRVVETzCB\nrDAjBgkqgw4DCgEBAgIwFgYKKoMOAwoBAQICAQYIKoMOAwoBAwMDgYQABIGArDcn\n5GXyalc1D+X09bVNvMajp5IJmFeibFghxxA2+zLZGxO48qXyQyQy1qoIz+KxLKwU\ndcZK/4XaZsv6ABQ+CBCe/N6EY19QrpKbXnSPvi9OeDyhaqJdRKX9Bx84EVWRz26W\np6D6JJoFb0HYw6kw+/WSFke/VzfTUYlBDypQOkmgODA2BgkqhkiG9w0BCQ4xKTAn\nMCUGBiqDDgMDBQQbMBkGCCqDDgMDBQEBDA0vdG1wL25jbC9vdXQyMA4GCiqDDgMK\nAQECAwIFAAOBgQAkbp3n+TRgsG+rwgzkC1+NEb7+I2o0NQgNGllxx5qfWGlb1/Se\n02mU+DXQgFvKd0R/ksBoC/5FpIXAvWF4v0fSTtnv6nj6zlksxNTEfgMxdqJpjy7v\nPwdkbD+49Dl5x7ycvVxeOGLs/zK0N/pSgmKO7kaXJmA4D87n5JZzwO7pgg==\n-----END CERTIFICATE REQUEST-----\n"
+      ]
+    },
+    "status": true
+  }
+}

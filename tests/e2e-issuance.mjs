@@ -22,6 +22,7 @@ const NUC_HOSTS = ['did.pki.gov.kz', 'nca.pki.gov.kz', 'nca.pki.gov.kz.example.k
 const createPage = readFileSync(resolve('tests/fixtures/nca-issuance/create.html'), 'utf8');
 const statusPage = readFileSync(resolve('tests/fixtures/nca-issuance/status.html'), 'utf8');
 let storages = 'PKCS12,AKKaztokenStore,AKKZIDCardStore', issued = [];
+const posts = [];
 const statusHtml = () => statusPage.replace('{{COUNT}}', String(issued.length))
   .replace('{{PEMS}}', issued.map((pem, index) => `<div id="hiddenCertrequests:${index}:pem" hidden>${pem}</div>`).join('\n'));
 
@@ -42,6 +43,11 @@ async function launch() {
     const url = new URL(route.request().url());
     if (url.href.startsWith(`http://127.0.0.1:${port}/`) || url.protocol === 'chrome-extension:') return route.continue();
     if (['did.pki.gov.kz', 'nca.pki.gov.kz', 'nca.pki.gov.kz.example.kz'].includes(url.host)) {
+      // The application form is recorded as encoded; 204 keeps the page so its state stays readable.
+      if (route.request().method() === 'POST') {
+        posts.push({ path: url.pathname, type: route.request().headers()['content-type'], body: route.request().postData() });
+        return route.fulfill({ status: 204 });
+      }
       const body = url.pathname.includes('/status') ? statusHtml() : url.pathname.includes('/frame') ? '<!doctype html><title>frame</title>' : createPage.replace('{{STORAGES}}', storages);
       return route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body });
     }
@@ -135,7 +141,7 @@ try {
   await hijack.close();
   await popup.locator('#cancel').click();
   assert.deepEqual(await answer(page), { status: true, body: {} });
-  assert.equal(await page.evaluate(() => window.submitted || false), false);
+  assert.deepEqual(posts, []);
   assert.deepEqual(await records(), []);
   console.log('PASS: cancel returns the NCALayer cancellation; the portal unblocks and nothing is stored; the request cannot be opened in the signing window');
 
@@ -154,8 +160,23 @@ try {
   assert.deepEqual(Object.keys(generated.body), ['pems']);
   assert.equal(generated.body.pems.length, 1);
   assert.match(generated.body.pems[0], /^-----BEGIN CERTIFICATE REQUEST-----\n/);
-  assert.equal(await page.evaluate(() => window.submitted), true);
+  // The form reaches the server exactly as a browser encodes it.
+  for (let i = 0; i < 100 && !posts.length; i++) await page.waitForTimeout(50);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].path, '/service/pkiorder/create.xhtml');
+  assert.equal(posts[0].type, 'application/x-www-form-urlencoded');
+  const form = new URLSearchParams(posts[0].body);
+  assert.deepEqual([...form.keys()], ['createForm', 'certrequestStr', 'storagePath', 'javax.faces.ViewState', 'submitOrderBTest']);
+  // A textarea submits CRLF line breaks; the PEM itself is unchanged.
+  assert.equal(form.get('certrequestStr'), generated.body.pems[0].replaceAll('\n', '\r\n'));
+  assert.equal(form.get('certrequestStr').replaceAll('\r\n', '\n'), generated.body.pems[0]);
+  assert.equal(form.get('storagePath'), '');
+  // $('storagePath') in pkiorder-basics.js selects <storagePath> elements: a body.container could never reach the form.
+  assert.equal(await page.evaluate(() => document.querySelectorAll('storagePath').length), 0);
+  assert.equal(form.get('javax.faces.ViewState'), 'synthetic-view-state:1');
+  assert.equal(form.get('submitOrderBTest'), 'Отправить');
   assert.equal(await page.evaluate(() => document.getElementById('certrequestStr').value), generated.body.pems[0]);
+  posts.length = 0;
   await popup.locator('#result-screen:not([hidden])').waitFor();
   const backupDownload = popup.waitForEvent('download');
   await popup.locator('#downloads a').click();

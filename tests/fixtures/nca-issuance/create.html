@@ -16,8 +16,14 @@
 <span id="omittedKeyIds" hidden></span>
 <span id="genKeyHiddenParams:0:algorithm" hidden>1.2.398.3.10.1.1.2.3.2</span>
 <span id="genKeyHiddenParams:0:publicKeylength" hidden>512</span>
-<textarea id="certrequestStr"></textarea>
-<button id="submitOrderBTest" type="button" onclick="window.submitted = true">submit</button>
+<!-- The JSF form posts certrequestStr, the clicked submitOrderBTest and javax.faces.ViewState (observed). -->
+<form id="createForm" method="post" action="/service/pkiorder/create.xhtml" enctype="application/x-www-form-urlencoded">
+<input type="hidden" name="createForm" value="createForm">
+<textarea id="certrequestStr" name="certrequestStr" hidden></textarea>
+<input type="hidden" id="storagePath" name="storagePath" value="">
+<input type="hidden" name="javax.faces.ViewState" value="synthetic-view-state:1">
+<input type="submit" id="submitOrderBTest" name="submitOrderBTest" value="Отправить" hidden>
+</form>
 <script>
 var SOCKET_URL = 'wss://127.0.0.1:13579/';
 var locale = 'ru';
@@ -66,6 +72,8 @@ async function createCertRequest() {
           if (response.status === true) {
             var body = response.body;
             if (body != null) {
+              // pkiorder-basics.js: $('storagePath') is a tag selector and matches no form field.
+              if (body.hasOwnProperty('container')) document.querySelectorAll('storagePath').forEach(function (node) { node.value = body.container; });
               if (body.hasOwnProperty('pems')) {
                 document.getElementById('certrequestStr').value = body.pems.join('<:>');
                 certRequestSubmitted = true;

@@ -1,0 +1,49 @@
+{
+  "ncalayer": "1.4",
+  "storage": {
+    "type": "PKCS12",
+    "folder": "/tmp/ncl/out"
+  },
+  "request": {
+    "module": "kz.gov.pki.knca.basics",
+    "method": "generateCsr",
+    "class": "PKIEssentials",
+    "args": {
+      "allowedStorages": [
+        "PKCS12",
+        "AKKaztokenStore",
+        "AKKZIDCardStore"
+      ],
+      "defaultPassword": "Synthetic1Default",
+      "dn": {
+        "2.5.4.3": "ТЕСТОВ ТЕСТ",
+        "2.5.4.4": "ТЕСТОВ",
+        "2.5.4.5": "IIN000000000000",
+        "2.5.4.6": "KZ",
+        "2.5.4.42": "ТЕСТҰЛЫ",
+        "2.5.4.10": "ТОО «ҚАЗАҚ СИНТЕТИКА»",
+        "2.5.4.11": "BIN000000000000"
+      },
+      "email": "test@example.kz",
+      "subjectAltNames": "",
+      "params": [
+        {
+          "algorithm": "1.2.398.3.10.1.1.2.3.2",
+          "length": 512
+        }
+      ],
+      "locale": "ru",
+      "omittedKeyIds": [
+        ""
+      ]
+    }
+  },
+  "response": {
+    "body": {
+      "pems": [
+        "-----BEGIN CERTIFICATE REQUEST-----\nMIICZjCCAc4CAQAwgcQxHjAcBgNVBAMMFdCi0JXQodCi0J7QkiDQotCV0KHQojEV\nMBMGA1UEBAwM0KLQldCh0KLQntCSMRgwFgYDVQQFEw9JSU4wMDAwMDAwMDAwMDAx\nCzAJBgNVBAYTAktaMTEwLwYDVQQKDCjQotCe0J4gwqvSmtCQ0JfQkNKaINCh0JjQ\nndCi0JXQotCY0JrQkMK7MRgwFgYDVQQLDA9CSU4wMDAwMDAwMDAwMDAxFzAVBgNV\nBCoMDtCi0JXQodCi0rDQm9CrMIGsMCMGCSqDDgMKAQECAjAWBgoqgw4DCgEBAgIB\nBggqgw4DCgEDAwOBhAAEgYD1vZ+rqlPd5P1Tunw+xeCGua7A3N2HGrIPTcfQeWWl\naSnX21vKaL6p+JisfiDRjEprThVJpF1vEbdUI2TLWbd9JPMfgi7ZRtwmHkb1jt5U\nuixsm+k+qMl9sQPf2LLQGLrDUtG0oiA5XaPGhlEgtgZiqZ2Rv3eiHjrReZVuqHd9\n9aBTMFEGCSqGSIb3DQEJDjFEMEIwGgYDVR0RBBMwEYEPdGVzdEBleGFtcGxlLmt6\nMCQGBiqDDgMDBQQaMBgGCCqDDgMDBQEBDAwvdG1wL25jbC9vdXQwDgYKKoMOAwoB\nAQIDAgUAA4GBAN+AmYEWymjzTx8TGEknIb4zMUrJp7VdsD/dTabngcoN0S9UMesJ\nAHJqCMyB+PTWXJ0XlOogceCbxfqAq4H14LlVsjj9mJ2FoWDcBV73jCXnPO6B68ni\nmKKk5+eEFzL+7/vdS3TERha7lXnxd63fH6BOFDCUu2dXiu5tPZxWPYQv\n-----END CERTIFICATE REQUEST-----\n"
+      ]
+    },
+    "status": true
+  }
+}

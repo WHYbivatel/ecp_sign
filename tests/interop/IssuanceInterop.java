@@ -5,7 +5,15 @@ import java.nio.file.*;
 import java.security.*;
 import java.security.cert.X509Certificate;
 import java.util.*;
+import kz.gov.pki.kalkan.asn1.ASN1Object;
+import kz.gov.pki.kalkan.asn1.ASN1Set;
 import kz.gov.pki.kalkan.asn1.DERObjectIdentifier;
+import kz.gov.pki.kalkan.asn1.pkcs.Attribute;
+import kz.gov.pki.kalkan.asn1.pkcs.CertificationRequestInfo;
+import kz.gov.pki.kalkan.asn1.x509.GeneralName;
+import kz.gov.pki.kalkan.asn1.x509.GeneralNames;
+import kz.gov.pki.kalkan.asn1.x509.X509Extension;
+import kz.gov.pki.kalkan.asn1.x509.X509Extensions;
 import kz.gov.pki.kalkan.asn1.DERSequence;
 import kz.gov.pki.kalkan.asn1.x509.BasicConstraints;
 import kz.gov.pki.kalkan.asn1.x509.KeyUsage;
@@ -16,6 +24,7 @@ import kz.gov.pki.kalkan.x509.X509V3CertificateGenerator;
 
 // Development-only issuance interop with the official Kalkan provider. Disposable keys only.
 //   csr <request.der>                  Kalkan verifies a PKCS#10 request
+//   attrs <request.der>                the subject and extensionRequest as Kalkan reads them
 //   name <dn.tsv>                      DER of the subject Kalkan builds from OID/value lines
 //   request <family> <dn.tsv> <out>    a PKCS#10 request generated and signed by Kalkan
 //   issue <request.der> <dir>          Kalkan acts as a GOST CA: root.der and leaf.der for the request
@@ -27,6 +36,27 @@ public class IssuanceInterop {
     PKCS10CertificationRequest request = new PKCS10CertificationRequest(Files.readAllBytes(Path.of(args[1])));
     if (!request.verify("KALKAN")) throw new Exception("Request signature invalid");
     System.out.println("KALKAN CSR VALID " + request.getSignatureAlgorithm().getObjectId().getId() + " " + request.getPublicKey("KALKAN").getAlgorithm());
+    break;
+   }
+   case "attrs": {
+    PKCS10CertificationRequest request = new PKCS10CertificationRequest(Files.readAllBytes(Path.of(args[1])));
+    if (!request.verify("KALKAN")) throw new Exception("Request signature invalid");
+    CertificationRequestInfo info = request.getCertificationRequestInfo();
+    System.out.println("SUBJECT " + info.getSubject().getOIDs());
+    ASN1Set attributes = info.getAttributes();
+    for (int i = 0; attributes != null && i < attributes.size(); i++) {
+     Attribute attribute = Attribute.getInstance(attributes.getObjectAt(i));
+     System.out.println("ATTRIBUTE " + attribute.getAttrType().getId());
+     if (!attribute.getAttrType().getId().equals("1.2.840.113549.1.9.14")) continue;
+     X509Extensions extensions = X509Extensions.getInstance(attribute.getAttrValues().getObjectAt(0));
+     for (Enumeration<?> e = extensions.oids(); e.hasMoreElements();) {
+      DERObjectIdentifier id = (DERObjectIdentifier) e.nextElement();
+      X509Extension extension = extensions.getExtension(id);
+      System.out.println("EXTENSION " + id.getId() + " critical=" + extension.isCritical());
+      if (id.getId().equals("2.5.29.17")) for (GeneralName name : GeneralNames.getInstance(ASN1Object.fromByteArray(extension.getValue().getOctets())).getNames())
+       System.out.println("SAN " + name.getTagNo() + " " + name.getName());
+     }
+    }
     break;
    }
    case "name": System.out.println("KALKAN NAME " + hex(name(args[1]).getEncoded())); break;

@@ -1,0 +1,51 @@
+{
+  "ncalayer": "1.4",
+  "storage": {
+    "type": "PKCS12",
+    "folder": "/tmp/ncl/out2"
+  },
+  "request": {
+    "module": "kz.gov.pki.knca.basics",
+    "method": "generateCsr",
+    "class": "PKIEssentials",
+    "args": {
+      "allowedStorages": [
+        "PKCS12"
+      ],
+      "defaultPassword": "Synthetic1Default",
+      "dn": {
+        "2.5.4.42": "ТЕСТҰЛЫ",
+        "2.5.4.11": "BIN000000000000",
+        "1.2.840.113549.1.9.1": "dn@example.kz",
+        "2.5.4.10": "ТОО «ҚАЗАҚ СИНТЕТИКА»",
+        "2.5.4.12": "ДИРЕКТОР",
+        "2.5.4.8": "АЛМАТЫ",
+        "2.5.4.6": "KZ",
+        "2.5.4.7": "АЛМАТЫ",
+        "2.5.4.5": "IIN000000000000",
+        "2.5.4.4": "ТЕСТОВ",
+        "2.5.4.3": "ТЕСТОВ ТЕСТ"
+      },
+      "email": "",
+      "subjectAltNames": "",
+      "params": [
+        {
+          "algorithm": "1.2.398.3.10.1.1.2.3.2",
+          "length": 512
+        }
+      ],
+      "locale": "ru",
+      "omittedKeyIds": [
+        ""
+      ]
+    }
+  },
+  "response": {
+    "body": {
+      "pems": [
+        "-----BEGIN CERTIFICATE REQUEST-----\nMIICszCCAhsCAQAwggErMR4wHAYDVQQDDBXQotCV0KHQotCe0JIg0KLQldCh0KIx\nFTATBgNVBAQMDNCi0JXQodCi0J7QkjEYMBYGA1UEBRMPSUlOMDAwMDAwMDAwMDAw\nMQswCQYDVQQGEwJLWjEVMBMGA1UEBwwM0JDQm9Cc0JDQotCrMRUwEwYDVQQIDAzQ\nkNCb0JzQkNCi0KsxMTAvBgNVBAoMKNCi0J7QniDCq9Ka0JDQl9CQ0pog0KHQmNCd\n0KLQldCi0JjQmtCQwrsxGDAWBgNVBAsMD0JJTjAwMDAwMDAwMDAwMDEZMBcGA1UE\nDAwQ0JTQmNCg0JXQmtCi0J7QoDEXMBUGA1UEKgwO0KLQldCh0KLSsNCb0KsxHDAa\nBgkqhkiG9w0BCQEWDWRuQGV4YW1wbGUua3owgawwIwYJKoMOAwoBAQICMBYGCiqD\nDgMKAQECAgEGCCqDDgMKAQMDA4GEAASBgDL64MyB5eW2LjSRjNAKNAIxTiMsRyrw\njsGEoobrxwQDWw3WDpvzsSJteUY7WaiVcbwdNgfhMgj4VW+jQ4dtp7wdfZoFnR0+\niMCY/bT2qpJBGg+KMgSEw0yl95VApVjp4GZ7J21hzpgT5vuY/d9GW3LXMuDvwegt\nZrFSu7GUWM4ToDgwNgYJKoZIhvcNAQkOMSkwJzAlBgYqgw4DAwUEGzAZBggqgw4D\nAwUBAQwNL3RtcC9uY2wvb3V0MjAOBgoqgw4DCgEBAgMCBQADgYEA1JxvLp8crhf5\n3XdJuJTvmld12lpUsbqOdyiJD0ec8QrJrCe9krkYYwgLK+UYmOULrk7/cCdf+Uei\nE1D4ZiYieSDjuTaaTkQzyhWeopuYdMOJStJHAOPu1ON15qTMGO6kyaeeu6eJDgvq\noC7Q/5HkaMAJmyGbuWzP3GhxFZU/i1c=\n-----END CERTIFICATE REQUEST-----\n"
+      ]
+    },
+    "status": true
+  }
+}

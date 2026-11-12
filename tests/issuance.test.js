@@ -28,7 +28,9 @@ const code = error => error?.code;
 test('generateCsr and importCertificate are normalized in the shape the NUC portal sends', () => {
   assert.ok(isIssuanceRequest(generateCall()));
   const generate = normalizeIssuance(generateCall());
-  assert.deepEqual(generate, { operation: 'issue-generate', issuance: true, dn: Object.entries(DN), email: undefined, keys: [{ algorithm: 'ECGOST3410-2015', length: 512 }] });
+  // NCALayer order, not page order: givenName (2.5.4.42) after OU (2.5.4.11).
+  const ordered = ['2.5.4.3', '2.5.4.4', '2.5.4.5', '2.5.4.6', '2.5.4.10', '2.5.4.11', '2.5.4.42'].map(id => [id, DN[id]]);
+  assert.deepEqual(generate, { operation: 'issue-generate', issuance: true, dn: ordered, email: undefined, keys: [{ algorithm: 'ECGOST3410-2015', length: 512 }] });
   assert.equal(JSON.stringify(generate).includes('portal-default'), false);
   // Empty hidden fields arrive as [""]; email in SAN; several keys.
   assert.equal(normalizeIssuance(generateCall({ allowedStorages: [''] })).operation, 'issue-generate');
@@ -109,6 +111,25 @@ function opensslIssue(csrPem) {
     return { text, leaf: read('leaf.der'), root: read('root.der') };
   } finally { rmSync(folder, { recursive: true, force: true }); }
 }
+
+test('requests match NCALayer 1.4 generateCsr on the same synthetic fields: subject order and types, SAN, algorithms, PEM', async () => {
+  for (const n of [1, 2, 3]) {
+    const { request: call, response } = JSON.parse(readFileSync(new URL(`fixtures/ncalayer-generate/exchange-${n}.json`, import.meta.url), 'utf8'));
+    const official = pemBody(response.body.pems[0]);
+    await verifyCsr(official);
+    const generated = await generateRequest(normalizeIssuance(call), PASSWORD, `reference-${n}`);
+    assert.deepEqual(Object.keys(response.body), Object.keys({ pems: generated.pems }));
+    const ours = pemBody(generated.pems[0]);
+    const [theirInfo, theirAlgorithm] = parse(official).value, [ourInfo, ourAlgorithm] = parse(ours).value;
+    assert.equal(der(ourInfo.value[1]), der(theirInfo.value[1]), `subject ${n}`);
+    assert.equal(der(ourInfo.value[2].value[0]), der(theirInfo.value[2].value[0]));
+    assert.equal(der(ourAlgorithm), der(theirAlgorithm));
+    const extensions = info => info.value[3].value.length ? info.value[3].value[0].value[1].value[0].value.map(item => der(item)) : [];
+    const san = list => list.filter(item => item.includes(der(forge.asn1.create(0, forge.asn1.Type.OID, false, forge.asn1.oidToDer('2.5.29.17').getBytes()))));
+    assert.deepEqual(san(extensions(ourInfo)), san(extensions(theirInfo)), `SAN ${n}`);
+    for (const pem of [generated.pems[0], response.body.pems[0]]) assert.match(pem, /^-----BEGIN CERTIFICATE REQUEST-----\n([A-Za-z0-9+/]{64}\n)*[A-Za-z0-9+/=]{1,64}\n-----END CERTIFICATE REQUEST-----\n$/);
+  }
+});
 
 test('the portal GOST-512 OID pair yields the same GOST 34.10-2015 512-bit request as the profile name', async () => {
   const request = normalizeIssuance(generateCall({ params: [{ algorithm: '1.2.398.3.10.1.1.2.3.2', length: 512 }] }));

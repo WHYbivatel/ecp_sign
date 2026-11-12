@@ -56,7 +56,16 @@ function distinguishedName(dn) {
     if (id === '2.5.4.6' && !/^[A-Z]{2}$/.test(value)) fail('GENKEY_INCORRECT_DN_VALUE', 'Некорректный код страны.');
     if (IA5_OIDS.has(id) && !/^[\x20-\x7e]+$/.test(value)) fail('GENKEY_INCORRECT_DN_VALUE', 'Недопустимые символы в поле заявки.');
   }
-  return entries;
+  return entries.sort(subjectOrder);
+}
+// NCALayer 1.4 orders the subject itself, whatever the page order: numerically by OID arcs,
+// emailAddress last (tests/fixtures/ncalayer-generate).
+const EMAIL_OID = '1.2.840.113549.1.9.1';
+function subjectOrder([a], [b]) {
+  if ((a === EMAIL_OID) !== (b === EMAIL_OID)) return a === EMAIL_OID ? 1 : -1;
+  const x = a.split('.').map(Number), y = b.split('.').map(Number);
+  for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return x[i] - y[i];
+  return x.length - y.length;
 }
 function keyParams(params) {
   if (!Array.isArray(params) || !params.length || params.length > 4) fail('GENKEY_UNKNOWN_ALG', 'Не указаны параметры ключа.');
