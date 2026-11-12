@@ -1,10 +1,9 @@
 import { PASSWORD_RULE, PASSWORD_HINT } from './issuance-protocol.js';
+import { STORE, validRecord, listRecords, removeRecord } from '../lib/issuance-store.js';
 
 const $ = selector => document.querySelector(selector);
 const api = globalThis.browser || chrome;
 const id = location.hash.slice(1);
-// Pending application keys, encrypted, kept until the certificate is installed or the user deletes them.
-const STORE = 'issuance:';
 const LABELS = { '2.5.4.3': 'Имя (CN)', '2.5.4.4': 'Фамилия', '2.5.4.42': 'Имя', '2.5.4.5': 'ИИН', '2.5.4.6': 'Страна', '2.5.4.7': 'Населённый пункт',
   '2.5.4.8': 'Регион', '2.5.4.10': 'Организация', '2.5.4.11': 'БИН', '2.5.4.12': 'Должность', '2.5.4.15': 'Категория', '2.5.4.46': 'Квалификатор DN',
   '1.2.840.113549.1.9.1': 'E-mail', '0.9.2342.19200300.100.1.25': 'Компонент домена' };
@@ -47,12 +46,7 @@ function run(payload) {
   });
 }
 
-const validRecord = value => value && value.v === 1 && /^[0-9a-f-]{36}$/.test(value.id) && Array.isArray(value.identities) && value.identities.length >= 1 && value.identities.length <= 4 &&
-  value.identities.every(item => typeof item === 'string' && /^[0-9a-f]{64}$/.test(item)) && value.sealed && typeof value.sealed === 'object' && typeof value.sealed.data === 'string';
-// The storage slot is the record id, or id~hash for a differing backup of the same application.
-async function records() {
-  return Object.entries(await api.storage.local.get(null)).filter(([key, value]) => key.startsWith(STORE) && validRecord(value)).map(([key, value]) => ({ ...value, slot: key.slice(STORE.length) }));
-}
+const records = () => listRecords(api);
 
 function download(blob, filename, label) {
   const url = URL.createObjectURL(blob); urls.push(url);
@@ -94,7 +88,7 @@ async function generate() {
     const recordId = crypto.randomUUID();
     const result = await run({ kind: 'issue-generate', request, password, context: recordId });
     clearPassword();
-    const record = { v: 1, id: recordId, origin, created: new Date().toISOString(), holder: request.dn.find(([oid]) => oid === '2.5.4.3')?.[1] || '',
+    const record = { v: 1, id: recordId, origin, created: new Date().toISOString(),
       algorithms: result.algorithms, identities: result.identities, status: 'requested', sealed: result.sealed };
     await api.storage.local.set({ [STORE + recordId]: record });
     try { await message('nca:complete', { result: { pems: result.pems } }); }
@@ -189,7 +183,7 @@ async function confirmInstalled() {
     const key = STORE + slot, record = (await api.storage.local.get(key))[key];
     if (record) await api.storage.local.set({ [key]: { ...record, status: 'installed', installed: new Date().toISOString() } });
   }
-  $('#forget').hidden = false;
+  $('#forget-panel').hidden = false;
   try {
     await message('nca:complete', { result: { installed: true } });
     $('#result-title').textContent = 'Файл ЭЦП сохранён';
@@ -208,23 +202,27 @@ $('#backup-file').addEventListener('change', async () => {
     let record;
     try { record = JSON.parse(await file.text()); } catch { throw new Error('Это не резервная копия ключа заявки Tegin.'); }
     if (!validRecord(record)) throw new Error('Это не резервная копия ключа заявки Tegin.');
-    const { v, id: recordId, origin: source, created, holder, algorithms, identities, sealed } = record;
+    const { v, id: recordId, origin: source, created, algorithms, identities, sealed } = record;
     // A backup never replaces a stored key: a damaged copy must not overwrite the working one.
     const same = (await records()).filter(stored => stored.id === recordId);
     if (same.some(stored => stored.sealed.data === sealed.data)) report('Эта резервная копия уже есть в браузере.');
     else {
       const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sealed.data)));
       const slot = same.length ? `${recordId}~${[...digest.slice(0, 4)].map(byte => byte.toString(16).padStart(2, '0')).join('')}` : recordId;
-      await api.storage.local.set({ [STORE + slot]: { v, id: recordId, origin: source, created, holder, algorithms, identities, status: 'requested', sealed } });
+      await api.storage.local.set({ [STORE + slot]: { v, id: recordId, origin: source, created, algorithms, identities, status: 'requested', sealed } });
       report('Резервная копия добавлена.');
     }
     await inspect();
   } catch (error) { report(error.message, true); }
 });
-$('#forget').addEventListener('click', async () => {
-  if (!confirm('Удалить ключ заявки из браузера? Восстановить его можно будет только из сохранённого файла .p12 или резервной копии.')) return;
-  await api.storage.local.remove(installed.map(slot => STORE + slot));
-  $('#forget').hidden = true;
+$('#forget').addEventListener('click', () => { $('#forget').hidden = true; $('#forget-confirm').hidden = false; $('#forget-no').focus(); });
+$('#forget-no').addEventListener('click', () => { $('#forget-confirm').hidden = true; $('#forget').hidden = false; $('#forget').focus(); });
+$('#forget-yes').addEventListener('click', async () => {
+  try {
+    for (const slot of installed) await removeRecord(api, slot);
+    $('#forget-confirm').hidden = true;
+    $('#forget-text').textContent = 'Ключ заявки удалён из браузера. Ключ ЭЦП остаётся в сохранённом файле .p12.';
+  } catch (error) { report(error.message, true); }
 });
 $('#password-form').addEventListener('submit', event => { event.preventDefault(); if (!$('#approve').disabled) $('#approve').click(); });
 for (const field of ['#password', '#password-confirm']) $(field).addEventListener('input', updateControls);

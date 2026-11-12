@@ -13,4 +13,9 @@
 .issue-state[data-bad]{color:var(--red);background:var(--red-bg)}
 .issue-backup{margin-top:16px;display:grid;gap:10px}
 .issue-downloads{display:grid;gap:10px;justify-items:center;margin-bottom:12px}
-#result-screen #forget{margin-bottom:10px}
+.issue-forget{text-align:left;padding:16px 18px;margin-bottom:12px;display:grid;gap:12px;background:var(--amber-bg);border-color:#f3e2c4}
+.issue-forget p{margin:0;font-size:11px;line-height:1.65;color:var(--ink)}
+.issue-forget .button,.issue-confirm .button{font-size:12px;min-height:40px}
+.issue-forget>.button{justify-self:start}
+.issue-confirm{display:grid;gap:10px;padding-top:12px;border-top:1px solid #f3e2c4}
+.issue-confirm>div{display:flex;gap:8px;flex-wrap:wrap}

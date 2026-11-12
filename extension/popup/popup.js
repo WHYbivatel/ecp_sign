@@ -1,5 +1,16 @@
+import { listRecords } from '../lib/issuance-store.js';
+
 document.querySelector('#modules').addEventListener('click', () => { location.assign((globalThis.browser || chrome).runtime.getURL('modules/index.html')); });
 const api = globalThis.browser || chrome;
+document.querySelector('#issuance-keys').addEventListener('click', () => { location.assign(api.runtime.getURL('keys/index.html')); });
+// Opening the extension also drops retired fields from stored application keys.
+listRecords(api).then(records => {
+  if (!records.length) return;
+  const count = records.length, tail = count % 10, tens = count % 100;
+  const noun = tail === 1 && tens !== 11 ? 'ключ' : tail >= 2 && tail <= 4 && (tens < 12 || tens > 14) ? 'ключа' : 'ключей';
+  document.querySelector('#issuance-count').textContent = `${count} ${noun} в этом браузере`;
+  document.querySelector('#issuance-keys').hidden = false;
+}).catch(() => {});
 const status = document.querySelector('#status');
 const enable = document.querySelector('#enable');
 let current;

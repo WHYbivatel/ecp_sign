@@ -46,4 +46,15 @@ test('NUC issuance stores only the encrypted application key and hands the passw
   assert.match(worker, /kind: 'issue-generated', \.\.\.result/);
   const issuance = await readFile(new URL('crypto/issuance.js', source), 'utf8');
   assert.match(issuance, /return \{ pems: csrs\.map\(csrPem\), identities, algorithms: [^,]+, sealed \};/);
+  assert.doesNotMatch(issue, /holder|2\.5\.4\.3'\)\?\.\[1\]/, 'no subject data in stored records');
+});
+
+test('the application keys page only lists and deletes records through the store module', async () => {
+  for (const file of ['keys/keys.js', 'popup/popup.js']) {
+    const text = await readFile(new URL(file, source), 'utf8');
+    assert.doesNotMatch(text, /storage\.local\.(set|remove|clear)|localStorage|indexedDB|\bfetch\(|sealed/, file);
+  }
+  const store = await readFile(new URL('lib/issuance-store.js', source), 'utf8');
+  assert.deepEqual([...store.matchAll(/storage\.local\.(set|remove|clear)\(([^)]*)\)/g)].map(match => `${match[1]} ${match[2]}`), ['set { [key]: record }', 'remove STORE + slot']);
+  assert.doesNotMatch(store, /\bfetch\(|runtime\.sendMessage/);
 });

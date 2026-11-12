@@ -189,7 +189,8 @@ try {
   await popup.close();
   const stored = await records();
   assert.equal(stored.length, 1);
-  assert.deepEqual(Object.keys(stored[0]).sort(), ['algorithms', 'created', 'holder', 'id', 'identities', 'origin', 'sealed', 'status', 'v']);
+  assert.deepEqual(Object.keys(stored[0]).sort(), ['algorithms', 'created', 'id', 'identities', 'origin', 'sealed', 'status', 'v']);
+  assert.ok(!JSON.stringify(stored).includes('ТЕСТОВ'), 'no subject data in the stored record');
   assert.equal(stored[0].sealed.cipher, 'AES-256-GCM');
   const storedText = JSON.stringify(await sw.evaluate(() => chrome.storage.local.get(null)));
   assert.ok(!storedText.includes(PASSWORD) && !storedText.includes('synthetic-default'));
@@ -206,6 +207,17 @@ try {
   await launch();
   assert.equal((await records()).length, 1);
   console.log('PASS: the encrypted application key survives a browser restart');
+
+  // A record written by an earlier version still holds the subject CN; opening the extension drops it.
+  const [current] = await records();
+  await sw.evaluate(value => chrome.storage.local.set({ [`issuance:${value.id}`]: { ...value, holder: 'ТЕСТОВ ТЕСТ' } }), current);
+  const home = await context.newPage();
+  await home.goto(`chrome-extension://${extensionId}/index.html?workspace=1`);
+  await home.locator('#issuance-keys:not([hidden])').waitFor();
+  assert.equal(await home.locator('#issuance-count').innerText(), '1 ключ в этом браузере');
+  assert.deepEqual(await records(), [current]);
+  await home.close();
+  console.log('PASS: opening the extension removes the stored CN from an earlier record without touching the key; the home screen links to the application keys');
 
   // Certificate for a key generated elsewhere: found nothing to install.
   const foreignRequest = await generateRequest(normalizeIssuance({ module: 'kz.gov.pki.knca.basics', method: 'generateCsr', class: 'PKIEssentials',
@@ -260,11 +272,61 @@ try {
   const p12Path = join(folder, 'issued.p12'); await p12File.saveAs(p12Path);
   assert.deepEqual(await answer(status), { status: true, body: { result: true } });
   assert.equal(await status.evaluate(() => window.statusChanged), true);
-  await popup.locator('#forget:not([hidden])').waitFor();
+  await popup.locator('#forget-panel:not([hidden])').waitFor();
+  assert.match(await popup.locator('#forget-text').innerText(), /Сначала проверьте, что файл \.p12 открывается/);
   await popup.screenshot({ path: resolve('artifacts/issuance-installed.png'), fullPage: true });
   assert.equal((await records())[0].status, 'installed');
   await popup.close();
-  console.log('PASS: service worker stopped mid-installation; wrong password refused, retry installs; chain and key checked; .p12 saved before the portal is told');
+  console.log('PASS: service worker stopped mid-installation; wrong password refused, retry installs; chain and key checked; .p12 saved before the portal is told; the window suggests checking the file before deleting the key');
+
+  // The window was closed without deleting the key: the application keys page removes it later, one record at a time.
+  const otherId = '33333333-3333-4333-8333-333333333333';
+  const other = { v: 1, id: otherId, origin: 'https://did.pki.gov.kz', created: '2026-11-11T09:00:00.000Z', algorithms: ['ГОСТ 34.10-2015 · 512 бит'],
+    identities: foreignRequest.identities, status: 'requested', sealed: foreignRequest.sealed };
+  await sw.evaluate(value => chrome.storage.local.set({ [`issuance:${value.id}`]: value }), other);
+  const keysPage = await context.newPage();
+  await keysPage.goto(`chrome-extension://${extensionId}/keys/index.html`);
+  await keysPage.locator('.key-record').nth(1).waitFor();
+  assert.equal(await keysPage.locator('.key-record').count(), 2);
+  const installedRow = keysPage.locator('.key-record[data-status=installed]'), pendingRow = keysPage.locator('.key-record[data-status=requested]');
+  assert.match(await installedRow.locator('.key-state').innerText(), /^Файл \.p12 сохранён \d{2}\.\d{2}\.\d{4}$/);
+  assert.match(await installedRow.locator('.key-meta').innerText(), /^ГОСТ 34\.10-2015 · 512 бит · № [0-9a-f]{8}$/);
+  assert.equal(await pendingRow.locator('.key-state').innerText(), 'Сертификат не установлен');
+  assert.equal(await pendingRow.locator('h2').innerText(), 'Заявка от 11.11.2026');
+  await installedRow.locator('.key-remove').click();
+  assert.match(await installedRow.locator('.key-confirm').innerText(), /убедитесь, что он открывается/);
+  await installedRow.locator('.key-no').click();
+  assert.equal(await keysPage.locator('.key-record').count(), 2);
+  await installedRow.locator('.key-remove').click();
+  await keysPage.screenshot({ path: resolve('artifacts/issuance-keys-confirm.png'), fullPage: true });
+  await installedRow.locator('.key-yes').click();
+  await keysPage.locator('#status').filter({ hasText: 'Запись удалена.' }).waitFor();
+  assert.equal(await keysPage.locator('.key-record').count(), 1);
+  assert.deepEqual(await records(), [other], 'the other record is left exactly as it was');
+  await pendingRow.locator('.key-remove').click();
+  assert.match(await pendingRow.locator('.key-confirm').innerText(), /только из резервной копии ключа заявки/);
+  await pendingRow.locator('.key-yes').click();
+  await keysPage.locator('#empty:not([hidden])').waitFor();
+  assert.deepEqual(await records(), []);
+  await keysPage.screenshot({ path: resolve('artifacts/issuance-keys-empty.png'), fullPage: true });
+  await keysPage.goto(`chrome-extension://${extensionId}/index.html?workspace=1`);
+  await keysPage.locator('#local').waitFor();
+  assert.equal(await keysPage.locator('#issuance-keys').isHidden(), true);
+  await keysPage.close();
+
+  // After deletion the backup still brings the key back for installation.
+  const recheck = await context.newPage();
+  await recheck.goto(STATUS);
+  popup = await startPopup(recheck, 'setX509CertToKeystore');
+  await popup.locator('#certificates').filter({ hasText: 'Ключ для этого сертификата в этом браузере не найден' }).waitFor();
+  await popup.locator('#backup-file').setInputFiles(backupPath);
+  await popup.locator('#status').filter({ hasText: 'Резервная копия добавлена.' }).waitFor();
+  await popup.locator('#certificates').filter({ hasText: 'Ключ заявки найден в этом браузере' }).waitFor();
+  await popup.locator('#cancel').click();
+  assert.deepEqual(await answer(recheck), { status: true, body: {} });
+  await recheck.close();
+  assert.equal((await records()).length, 1);
+  console.log('PASS: after the window is closed, the keys page lists both records, warns before each deletion, removes only the chosen one; the backup restores the key afterwards');
 
   // The saved .p12 signs a document through the regular NCALayer basics call.
   await status.evaluate(() => new Promise(done => { window.socket = new WebSocket('wss://127.0.0.1:13579'); window.socket.onopen = done; }));
@@ -350,8 +412,16 @@ try {
   const marked = (await records()).filter(record => record.status === 'installed');
   assert.equal(marked.length, 1);
   assert.equal(marked[0].id, backup.id);
+  const before = Object.keys(await sw.evaluate(() => chrome.storage.local.get(null))).filter(key => key.startsWith('issuance:'));
+  await popup.locator('#forget').click();
+  assert.match(await popup.locator('#forget-confirm').innerText(), /Удалить ключ заявки из браузера\?/);
+  await popup.locator('#forget-yes').click();
+  await popup.locator('#forget-text').filter({ hasText: 'Ключ заявки удалён из браузера.' }).waitFor();
+  const after = Object.keys(await sw.evaluate(() => chrome.storage.local.get(null))).filter(key => key.startsWith('issuance:'));
+  assert.equal(after.length, before.length - 1);
+  assert.ok((await records()).every(record => record.status !== 'installed'), 'only the installed record is removed');
   await popup.close(); await status.close();
-  console.log('PASS: in a browser without the key, the backup restores installation; a forged record is refused as another key, a damaged copy neither replaces nor blocks the intact one');
+  console.log('PASS: in a browser without the key, the backup restores installation; a forged record is refused as another key, a damaged copy neither replaces nor blocks the intact one; deleting from the window removes only the installed record');
 
   assert.deepEqual(escaped, []);
   assert.deepEqual(errors, []);
