@@ -13,6 +13,7 @@ import { requestTimestamp, TSA_PROFILES } from '../extension/crypto/timestamp.js
 import { RevocationChecker, memoryStore } from '../extension/crypto/revocation.js';
 import { verifyCms } from '../extension/crypto/cms-verify.js';
 import { forge, oid, der } from '../extension/crypto/encoding.js';
+import { openContainer } from '../extension/crypto/signer.js';
 import { SignedXml } from 'xml-crypto';
 import { DOMParser } from '@xmldom/xmldom';
 import { PDFDocument } from 'pdf-lib';
@@ -602,6 +603,51 @@ try {
     assert.match(await tool.locator('#result-details').textContent(), /Метка времени: .*\n.*\nАрхивная метка времени: /);
     console.log('PASS: CAdES-LTA with live NUC RSA time-stamps: the extension verifies the archive-time-stamp-v3 offline and labels it');
   }
+  // Password change: refusals first, then a copy that opens with the new password only and keeps key and certificates.
+  const passwordTool = await context.newPage();
+  await passwordTool.goto(`chrome-extension://${extensionId}/password/index.html`);
+  const NEW_PASSWORD = 'NewPass2026';
+  for (const [label, key] of [['RSA', fixture.container], ['GOST 512', gost.container]]) {
+    const original = Buffer.from(key);
+    await passwordTool.locator('#key-file').setInputFiles({ name: 'disposable-key.p12', mimeType: 'application/x-pkcs12', buffer: original });
+    await passwordTool.locator('#old-password').fill(PASSWORD + 'x');
+    for (const field of ['#new-password', '#repeat-password']) await passwordTool.locator(field).fill('onlyletters');
+    assert.equal(await passwordTool.locator('#submit').isDisabled(), true, 'weak new password blocks the change');
+    assert.equal(await passwordTool.locator('#rules [data-rule=mix]').getAttribute('data-bad'), '');
+    for (const field of ['#new-password', '#repeat-password']) await passwordTool.locator(field).fill(NEW_PASSWORD);
+    await passwordTool.locator('#submit').click();
+    await passwordTool.locator('#status[data-error]').filter({ hasText: 'Текущий пароль не подошёл' }).waitFor();
+    await passwordTool.locator('#old-password').fill(PASSWORD);
+    await passwordTool.locator('#submit').click();
+    await passwordTool.locator('#result:not([hidden])').waitFor({ timeout: 60000 });
+    for (const field of ['#old-password', '#new-password', '#repeat-password']) assert.equal(await passwordTool.locator(field).inputValue(), '');
+    assert.match(await passwordTool.locator('#protection-after').textContent(), /HMAC-SHA-256.*PBES2 AES-256-CBC/);
+    if (label === 'RSA') await passwordTool.screenshot({ path: resolve('artifacts/password-result.png'), fullPage: true });
+    const passwordDownload = passwordTool.waitForEvent('download'); await passwordTool.locator('#download').click();
+    const saved = await passwordDownload;
+    assert.equal(saved.suggestedFilename(), 'disposable-key (новый пароль).p12');
+    const changed = new Uint8Array(readFileSync(await saved.path()));
+    const before = await openContainer(original, PASSWORD, { exportKey: true }), after = await openContainer(changed, NEW_PASSWORD, { exportKey: true });
+    assert.equal(der(after.privateKeyInfo()), der(before.privateKeyInfo()));
+    assert.deepEqual(after.certificates.map(der), before.certificates.map(der));
+    before.destroy(); after.destroy();
+    await assert.rejects(openContainer(changed, PASSWORD), { code: 'PASSWORD_OR_DAMAGED' });
+    assert.deepEqual(original, Buffer.from(key), 'the selected file is untouched');
+    // The user's next step: the new file opens in the signing tool with the new password.
+    const check = await context.newPage();
+    await check.goto(`chrome-extension://${extensionId}/signing/approve.html`);
+    await check.locator('#document').setInputFiles({ name: 'test.txt', mimeType: 'text/plain', buffer: data });
+    await check.locator('#key-file').setInputFiles({ name: saved.suggestedFilename(), mimeType: 'application/x-pkcs12', buffer: Buffer.from(changed) });
+    await check.locator('#password').fill(NEW_PASSWORD); await check.locator('#unlock').click();
+    await check.locator('#certificate:not([hidden])').waitFor();
+    await check.close();
+    await passwordTool.locator('#again').click();
+    await passwordTool.locator('#change-form:not([hidden])').waitFor();
+    console.log(`PASS: password change ${label}: wrong old and weak new passwords refused, the copy opens with the new password in the signing tool, the old password fails, key and certificates unchanged, original untouched`);
+  }
+  await passwordTool.setViewportSize({ width: 400, height: 900 });
+  await passwordTool.screenshot({ path: resolve('artifacts/password-400.png'), fullPage: true });
+  await passwordTool.close();
   const popupPage = await context.newPage();
   await popupPage.setViewportSize({ width: 400, height: 600 });
   await popupPage.goto(`chrome-extension://${extensionId}/index.html`);
@@ -644,6 +690,15 @@ try {
   await tool.locator('#verify').waitFor();
   console.log('PASS: home, sign and verify stay in one tab without separate windows');
   await tool.close();
+  const launcher = await context.newPage();
+  await launcher.goto(`chrome-extension://${extensionId}/index.html`);
+  const passwordTab = context.waitForEvent('page', page => page.url().endsWith('/password/index.html'));
+  await launcher.locator('#change-password').click();
+  const passwordPage = await passwordTab;
+  await passwordPage.locator('#change-form').waitFor();
+  await passwordPage.close();
+  if (!launcher.isClosed()) await launcher.close();
+  console.log('PASS: launcher opens the password tool in a tab');
   if (!popupPage.isClosed()) await popupPage.close();
 
   const opened = context.waitForEvent('page');
@@ -654,6 +709,15 @@ try {
   answer = await result();
   assert.equal(answer.code, '500');
   console.log('PASS: closing confirmation cancels the operation');
+
+  // The NUC password page sends Applet calls without a module; Tegin refuses them without a window.
+  for (const request of [{ method: 'browseKeyStore', args: ['PKCS12', 'P12', ''] }, { method: 'changePassword', args: ['PKCS12', '/synthetic/key.p12', 'Old12345', 'New12345'] }]) {
+    await send(request); answer = await result();
+    assert.equal(answer.code, '400');
+    assert.match(answer.message, /Сменить пароль ключа/);
+  }
+  assert.equal(context.pages().some(item => item.url().includes('/signing/approve.html#')), false);
+  console.log('PASS: NUC password page calls (browseKeyStore, changePassword) refused with a pointer to the local tool, no window opened');
 
   await send({ ...basics, args: { ...basics.args, signingParams: { tsaProfile: {} } } });
   answer = await result();

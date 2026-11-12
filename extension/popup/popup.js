@@ -31,6 +31,12 @@ async function openTool(mode = '') {
 if (new URLSearchParams(location.search).has('workspace')) document.body.setAttribute('data-workspace', '');
 document.querySelector('#local').addEventListener('click', () => openTool());
 document.querySelector('#verify').addEventListener('click', () => openTool('verify'));
+// A file chooser can close the action popup, so the password tool opens in a tab.
+document.querySelector('#change-password').addEventListener('click', async () => {
+  const url = api.runtime.getURL('password/index.html');
+  if (new URLSearchParams(location.search).has('workspace')) { location.assign(url); return; }
+  try { await api.tabs.create({ url }); window.close(); } catch (error) { status.textContent = error.message; }
+});
 const STAGES = { refused: 'Отклонён', answered: 'Отвечен сразу', window: 'Открыто окно Tegin' };
 const FINAL = { ok: 'Выполнен', cancelled: 'Отменён' };
 async function showLog(tabId) {

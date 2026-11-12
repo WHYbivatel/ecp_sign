@@ -19,11 +19,7 @@ function nameValue(node, field) {
     if (oidValue(entry.value[0]) !== field) continue;
     const value = entry.value[1];
     if (value.type === A.Type.UTF8) return forge.util.decodeUtf8(value.value);
-    if (value.type === A.Type.BMPSTRING) {
-      let result = '';
-      for (let i = 0; i < value.value.length; i += 2) result += String.fromCharCode(value.value.charCodeAt(i) * 256 + value.value.charCodeAt(i + 1));
-      return result;
-    }
+    // forge already decodes BMPSTRING from UTF-16BE into the JavaScript string.
     return value.value;
   }
   return '';
@@ -282,7 +278,9 @@ export async function openContainer(container, password, options = {}) {
   }
 }
 
-async function openAuthenticatedContainer(container, password, { now = Date.now() } = {}, state) {
+// exportKey is for the password change only: the signer then also returns the PKCS#8 and the
+// container layout, and stays inside the worker like every other opened key.
+async function openAuthenticatedContainer(container, password, { now = Date.now(), exportKey = false } = {}, state) {
   const { profile } = state;
   inspectPkcs12(container);
   profile.size = container.length;
@@ -363,7 +361,17 @@ async function openAuthenticatedContainer(container, password, { now = Date.now(
       }
       // The browser worker owns all decrypted data and is terminated after each operation.
       let rsaKey = info.keyOid === O.rsa ? keyBag.key : null;
+      let exportable = exportKey ? keyBag : null;
+      const exported = exportKey ? {
+        contents: { ...profile.bags }, protection: { integrity: profile.integrity, encryption: profile.encryption },
+        alias: typeof keyBag.attributes?.friendlyName?.[0] === 'string' ? keyBag.attributes.friendlyName[0] : undefined,
+        privateKeyInfo() {
+          if (!exportable) throw new Error('Ключ уже закрыт.');
+          return exportable.key ? forge.pki.wrapRsaPrivateKey(forge.pki.privateKeyToAsn1(exportable.key)) : exportable.asn1;
+        }
+      } : {};
       return {
+        ...exported,
         info, certificates: certBags.map(bag => bag.cert ? forge.pki.certificateToAsn1(bag.cert) : bag.asn1),
         async digest(data) {
           if (info.keyOid === O.rsa) return new Uint8Array(await crypto.subtle.digest('SHA-256', data));
@@ -398,7 +406,7 @@ async function openAuthenticatedContainer(container, password, { now = Date.now(
           if (!engine.verify(publicKey, signature, hash)) throw new Error('Самопроверка подписи не пройдена.');
           return signature; // Kalkan's Kazakhstan OIDs encode r_LE || s_LE.
         },
-        destroy() { if (key instanceof Uint8Array) key.fill(0); key = null; publicKey = null; rsaKey = null; }
+        destroy() { if (key instanceof Uint8Array) key.fill(0); key = null; publicKey = null; rsaKey = null; exportable = null; }
       };
     }
   }

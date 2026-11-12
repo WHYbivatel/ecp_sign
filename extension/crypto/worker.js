@@ -13,6 +13,7 @@ import { A, oidValue } from './encoding.js';
 import { RevocationChecker, blocks, summarize, assessHistory, isCurrent, STATES } from './revocation.js';
 import { generateRequest, inspectCertificates, installCertificates, IssuanceError } from './issuance.js';
 import { trustStore } from './trust-store.js';
+import { changeContainerPassword } from './password-change.js';
 
 // Test builds only (scripts/build.mjs with TEGIN_TEST_ISSUANCE_ANCHORS): synthetic roots accepted
 // for issued certificates next to the bundled NCA roots.
@@ -162,6 +163,16 @@ self.onmessage = async ({ data }) => {
       const containers = files.map(file => file.container.buffer);
       self.postMessage({ kind: 'issue-installed', files: files.map(({ recordId, slot, container, certificate }) => ({ recordId, slot, container: container.buffer, certificate })) }, containers);
       self.close();
+    } else if (data.kind === 'change-password') {
+      const raw = new Uint8Array(data.container);
+      let oldPassword = data.oldPassword, newPassword = data.newPassword;
+      data.oldPassword = data.newPassword = '';
+      try {
+        const changed = await changeContainerPassword(raw, oldPassword, newPassword);
+        oldPassword = newPassword = '';
+        self.postMessage({ kind: 'password-changed', container: changed.container.buffer, certificate: changed.certificate, protection: changed.protection }, [changed.container.buffer]);
+      } finally { raw.fill(0); oldPassword = newPassword = ''; }
+      self.close();
     } else if (data.kind === 'sign') {
       if (!signer) throw new Error('Сначала откройте ключ.');
       const request = data.request;
@@ -205,8 +216,10 @@ self.onmessage = async ({ data }) => {
     }
   } catch (error) {
     const certificate = data.kind === 'open' ? (signer ? { ...signer.info.summary, trust } : error.certificate) : undefined;
-    const diagnostic = data.kind === 'open' && !signer ? error.diagnostic : undefined;
-    self.postMessage({ kind: 'error', message: error.message || 'Операция не выполнена.', certificate, code: error.revocation || error instanceof IssuanceError ? error.code : diagnostic?.code, diagnostic });
+    const diagnostic = (data.kind === 'open' && !signer) || data.kind === 'change-password' ? error.diagnostic : undefined;
+    const known = error.revocation || error instanceof IssuanceError || (data.kind === 'change-password' && typeof error.code === 'string');
+    self.postMessage({ kind: 'error', message: error.message || 'Операция не выполнена.', certificate, code: known ? error.code : diagnostic?.code, diagnostic });
+    if (data.kind === 'change-password') self.close();
     signer?.destroy(); signer = null;
   } finally { busy = false; }
 };

@@ -1,6 +1,8 @@
 import { adaptRequest, adapterResponse } from '../modules/adapters.js';
 const COMMON = 'kz.gov.pki.knca.commonUtils';
 const BASICS = 'kz.gov.pki.knca.basics';
+const APPLET = 'kz.gov.pki.knca.applet.Applet';
+export const PASSWORD_PAGE_REFUSAL = 'Смена пароля через страницу сайта не поддерживается: Tegin не передаёт сайтам путь к файлу ключа и не принимает пароли со страницы. Откройте Tegin → «Сменить пароль ключа».';
 export const MAX_MESSAGE_LENGTH = 3 * 1024 * 1024;
 // Same limit as crypto/xml.js, which the background bundle does not import.
 const MAX_XPATH_LENGTH = 512;
@@ -30,6 +32,8 @@ export function normalizeRequest(input) {
     return adapted;
   }
   const { module, method, args } = input;
+  // NUC password page (Applet module): the site gets the file path and sends both passwords itself.
+  if ((module === undefined || module === APPLET) && ['browseKeyStore', 'changePassword'].includes(method)) unsupported(PASSWORD_PAGE_REFUSAL);
   if (module === COMMON) {
     if (method === 'getActiveTokens') return { immediate: true, value: [] };
     if (method === 'changeLocale') return { immediate: true, value: true };

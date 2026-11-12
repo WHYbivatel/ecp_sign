@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeRequest, errorResponse, successResponse } from '../extension/signing/protocol.js';
+import { normalizeRequest, errorResponse, successResponse, PASSWORD_PAGE_REFUSAL } from '../extension/signing/protocol.js';
 const common = 'kz.gov.pki.knca.commonUtils';
 const basics = 'kz.gov.pki.knca.basics';
 test('normalizes commonUtils and basics without silently dropping unsupported requirements', () => {
@@ -22,6 +22,13 @@ test('normalizes commonUtils and basics without silently dropping unsupported re
   assert.equal(normalizeRequest({ ...request, args: { ...request.args, signingParams: {} } }).encapsulate, true);
   assert.equal(normalizeRequest({ ...request, args: { ...request.args, signingParams: { digested: true, encapsulate: false } } }).digested, true);
   assert.throws(() => normalizeRequest({ module: common, method: 'runShell', args: ['PKCS12'] }));
+});
+test('the NUC password page flow is refused with a pointer to the local tool', () => {
+  for (const request of [{ method: 'browseKeyStore', args: ['PKCS12', 'P12', ''] }, { module: 'kz.gov.pki.knca.applet.Applet', method: 'changePassword', args: ['PKCS12', '/path/key.p12', 'old', 'new'] }]) {
+    assert.throws(() => normalizeRequest(request), error => error.message === PASSWORD_PAGE_REFUSAL);
+    assert.deepEqual(errorResponse(request, PASSWORD_PAGE_REFUSAL), { code: '400', message: PASSWORD_PAGE_REFUSAL, responseObject: null });
+  }
+  assert.throws(() => normalizeRequest({ method: 'loadSlotList', args: ['PKCS12'] }), /пока не поддерживается/);
 });
 test('response formats preserve the two protocol families and cancellation', () => {
   assert.deepEqual(successResponse({ module: common }, 'signature').responseObject, 'signature');

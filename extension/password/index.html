@@ -1,0 +1,51 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Сменить пароль ключа · Tegin</title><link rel="stylesheet" href="../theme.css"><link rel="stylesheet" href="password.css"><script src="password.js" defer></script></head><body>
+<header><a href="../index.html?workspace=1" class="button quiet">← На главную</a><div class="brand"><img src="../assets/brand.svg" alt=""><strong>Tegin</strong></div></header>
+<main>
+<div class="page-heading"><p class="eyebrow">ФАЙЛОВЫЙ КЛЮЧ ЭЦП</p><h1>Сменить пароль ключа</h1><p class="intro">Tegin откроет ключ старым паролем и сохранит копию с новым паролем. Выбранный файл не изменится: он остаётся у вас, пока вы не проверите новый.</p></div>
+
+<form id="change-form" class="panel change-card" autocomplete="off" novalidate>
+<label for="key-file" class="key-picker" id="key-drop"><span class="picker-icon"><svg class="icon"><use href="../assets/icons.svg#file"/></svg></span><span><strong id="key-name">Выбрать ключ</strong><small id="key-size">Файл .p12 или .pfx, до 4 МБ</small></span><svg class="icon muted"><use href="../assets/icons.svg#chevron"/></svg></label>
+<input id="key-file" class="file-input" type="file" accept=".p12,.pfx">
+
+<label class="field-label" for="old-password">Текущий пароль</label>
+<div class="password-field"><input id="old-password" type="password" autocomplete="off" spellcheck="false"><button type="button" class="reveal" data-target="old-password" aria-label="Показать пароль" aria-pressed="false"><svg class="icon"><use href="../assets/icons.svg#eye"/></svg></button></div>
+
+<div class="field-pair">
+<div><label class="field-label" for="new-password">Новый пароль</label>
+<div class="password-field"><input id="new-password" type="password" autocomplete="new-password" spellcheck="false" maxlength="32" aria-describedby="rules"><button type="button" class="reveal" data-target="new-password" aria-label="Показать пароль" aria-pressed="false"><svg class="icon"><use href="../assets/icons.svg#eye"/></svg></button></div></div>
+<div><label class="field-label" for="repeat-password">Повторите новый пароль</label>
+<div class="password-field"><input id="repeat-password" type="password" autocomplete="new-password" spellcheck="false" maxlength="32"><button type="button" class="reveal" data-target="repeat-password" aria-label="Показать пароль" aria-pressed="false"><svg class="icon"><use href="../assets/icons.svg#eye"/></svg></button></div></div>
+</div>
+<ul id="rules" class="rules" aria-label="Требования к новому паролю">
+<li data-rule="length">6–32 символа</li>
+<li data-rule="mix">Латинская буква и цифра</li>
+<li data-rule="chars">Только латиница, цифры и . ? # $ ^ + = ! * ( ) @ % &amp; _ -</li>
+<li data-rule="differs">Отличается от текущего</li>
+<li data-rule="repeat">Повтор совпадает</li>
+</ul>
+<p class="field-note">Требования те же, что у NCALayer для файловых ключей, поэтому новый файл откроется и в NCALayer. Надёжнее пароль длиной от 12 символов.</p>
+
+<button id="submit" type="submit" class="button submit" disabled><svg class="icon"><use href="../assets/icons.svg#lock"/></svg>Сохранить копию с новым паролем</button>
+<p id="status" class="status-message" role="status" aria-live="polite"></p>
+</form>
+
+<section id="result" class="panel result-card" hidden aria-labelledby="result-title">
+<div class="result-head"><span class="result-icon"><svg class="icon"><use href="../assets/icons.svg#check"/></svg></span><div><h2 id="result-title" tabindex="-1">Копия с новым паролем готова</h2><p id="result-holder" class="muted"></p></div></div>
+<dl class="result-facts">
+<dt>Проверено</dt><dd>Новый файл открывается новым паролем, старый пароль к нему не подходит, ключ и сертификаты совпадают с исходными.</dd>
+<dt>Защита исходного файла</dt><dd id="protection-before"></dd>
+<dt>Защита нового файла</dt><dd id="protection-after"></dd>
+</dl>
+<a id="download" class="button"><svg class="icon"><use href="../assets/icons.svg#download"/></svg>Скачать новый файл</a>
+<ol class="next-steps">
+<li>Откройте новый файл в «Подписать файл» с новым паролем.</li>
+<li>Если ключ открылся, замените им старый файл там, где храните ключ. Пароль не восстанавливается: запомните новый.</li>
+</ol>
+<button id="again" type="button" class="button secondary">Сменить пароль другого ключа</button>
+</section>
+
+<details class="panel nca-note"><summary><svg class="icon"><use href="../assets/icons.svg#info"/></svg>Страница смены пароля на сайте НУЦ</summary>
+<p>Форма на pki.gov.kz работает через NCALayer: она получает путь к файлу на диске, отправляет его на сервер НУЦ и передаёт старый и новый пароли через страницу, после чего NCALayer перезаписывает исходный файл. Tegin не раскрывает сайтам пути к файлам и не принимает пароли со страницы, поэтому на сайте НУЦ эта форма с Tegin не работает. Сменить пароль можно здесь, в окне расширения.</p></details>
+
+<footer><svg class="icon"><use href="../assets/icons.svg#lock"/></svg>Ключ обрабатывается только на этом устройстве. Пароли не сохраняются и никуда не передаются.</footer>
+</main></body></html>

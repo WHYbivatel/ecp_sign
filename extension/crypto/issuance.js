@@ -196,7 +196,6 @@ async function provePossession(key, info) {
 }
 
 const attribute = (id, value) => seq(oid(id), A.create(0, A.Type.SET, true, [value]));
-function bmp(value) { let result = ''; for (const char of value) result += String.fromCharCode(char.charCodeAt(0) >> 8, char.charCodeAt(0) & 255); return result; }
 function integerBytes(value) {
   let text = value.toString(16); if (text.length % 2) text = '0' + text;
   if (parseInt(text.slice(0, 2), 16) & 128) text = '00' + text;
@@ -206,11 +205,18 @@ function integerBytes(value) {
 // friendlyName and localKeyId = SHA-1 of the public key bits) with modern protection.
 export async function buildPkcs12(key, certificates, password) {
   if (!PASSWORD_RULE.test(password)) fail('PASSWORD_POLICY', PASSWORD_HINT);
+  return writePkcs12(await privateKeyInfo(key), certificates, password);
+}
+// certificates: DER (bytes or binary strings), the key's certificate first. The password must be ASCII: forge passes it to
+// PBKDF2 unconverted. friendlyName defaults to the hex localKeyId, as Kalkan names its entries.
+export function writePkcs12(privateInfo, certificates, password, { friendlyName } = {}) {
   const leaf = certificateInfo(certificates[0]);
   const keyBits = (leaf.spki.value[1].bitStringContents || leaf.spki.value[1].value).slice(1);
   const localKeyId = forge.md.sha1.create().update(keyBits).digest().getBytes();
-  const attributes = () => A.create(0, A.Type.SET, true, [attribute('1.2.840.113549.1.9.20', A.create(0, A.Type.BMPSTRING, false, bmp(forge.util.bytesToHex(localKeyId)))), attribute('1.2.840.113549.1.9.21', octet(localKeyId))]);
-  const encrypted = forge.pki.encryptPrivateKeyInfo(await privateKeyInfo(key), password, { algorithm: 'aes256', prfAlgorithm: 'sha256', count: PKCS12_ITERATIONS, saltSize: 16 });
+  const alias = friendlyName ?? forge.util.bytesToHex(localKeyId);
+  // forge encodes BMPSTRING values from the JavaScript string as UTF-16BE itself.
+  const attributes = () => A.create(0, A.Type.SET, true, [attribute('1.2.840.113549.1.9.20', A.create(0, A.Type.BMPSTRING, false, alias)), attribute('1.2.840.113549.1.9.21', octet(localKeyId))]);
+  const encrypted = forge.pki.encryptPrivateKeyInfo(privateInfo, password, { algorithm: 'aes256', prfAlgorithm: 'sha256', count: PKCS12_ITERATIONS, saltSize: 16 });
   const keyBag = seq(oid(forge.pki.oids.pkcs8ShroudedKeyBag), A.create(A.Class.CONTEXT_SPECIFIC, 0, true, [encrypted]), attributes());
   const certBags = certificates.map((raw, index) => seq(oid(forge.pki.oids.certBag), A.create(A.Class.CONTEXT_SPECIFIC, 0, true, [seq(oid(forge.pki.oids.x509Certificate), A.create(A.Class.CONTEXT_SPECIFIC, 0, true, [octet(raw)]))]), ...(index === 0 ? [attributes()] : [])));
   const data = bags => seq(oid(O.data), A.create(A.Class.CONTEXT_SPECIFIC, 0, true, [octet(der(seq(...bags)))]));
