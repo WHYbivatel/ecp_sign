@@ -42,7 +42,7 @@ async function launchBrandedChrome(profile, extension, { args = [], viewport, he
   mkdirSync(profile, { recursive: true });
   const child = spawn(chromePath(), [
     `--user-data-dir=${profile}`, '--remote-debugging-pipe', '--remote-debugging-port=0', '--enable-unsafe-extension-debugging',
-    '--no-first-run', '--no-default-browser-check', '--disable-search-engine-choice-screen', '--password-store=basic', '--use-mock-keychain',
+    '--no-first-run', '--no-default-browser-check', '--disable-search-engine-choice-screen', '--disable-component-extensions-with-background-pages', '--password-store=basic', '--use-mock-keychain',
     ...(process.getuid?.() === 0 ? ['--no-sandbox'] : []), ...(headless ? ['--headless=new'] : []), ...(viewport ? [`--window-size=${viewport.width},${viewport.height}`] : []), ...args, 'about:blank'
   ], { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
   let stderr = ''; child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-4000); });

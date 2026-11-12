@@ -51,7 +51,10 @@ async function launch(profile = 'profile') {
       const body = url.pathname.includes('/status') ? statusHtml() : url.pathname.includes('/frame') ? '<!doctype html><title>frame</title>' : createPage.replace('{{STORAGES}}', storages);
       return route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body });
     }
-    escaped.push(url.href); return route.abort();
+    // Branded Chrome's own component extensions (Docs Offline) are blocked but are not Tegin traffic.
+    const worker = route.request().serviceWorker()?.url();
+    if (!worker || !worker.startsWith('chrome-extension:') || new URL(worker).host === extensionId) escaped.push(url.href);
+    return route.abort();
   });
   sw = await extensionWorker(context);
   extensionId = new URL(sw.url()).host;
