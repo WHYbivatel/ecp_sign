@@ -5,9 +5,9 @@ import { A, O, forge, parse, binary, bytes, der, oidValue, base64, utf8, seq, se
 import { inspectPkcs12, ContainerError } from '../lib/pkcs12.js';
 
 export const schemes = {
-  [O.gost512]: { label: 'ГОСТ 34.10-2015 · 512 бит', version: 2012, length: 512, namedCurve: 'T-512-A', curveOid: '1.2.398.3.10.1.1.2.2.1', hash: O.hash512, signature: O.sig512 },
-  [O.gost256]: { label: 'ГОСТ 34.10-2015 · 256 бит', version: 2012, length: 256, curve: nca256, curveOid: '1.2.398.3.10.1.1.2.1.1', hash: O.hash256, signature: O.sig256 },
-  [O.gost2004]: { label: 'ГОСТ 34.310-2004', version: 2001, length: 256, namedCurve: 'S-256-A', curveOid: '1.2.398.3.10.1.1.1.1.1', hash: O.hash2004, signature: O.sig2004 }
+  [O.gost512]: { label: 'ГОСТ 34.10-2015 · 512 бит', kncaName: 'ECGOST3410-2015', version: 2012, length: 512, namedCurve: 'T-512-A', curveOid: '1.2.398.3.10.1.1.2.2.1', hash: O.hash512, signature: O.sig512 },
+  [O.gost256]: { label: 'ГОСТ 34.10-2015 · 256 бит', kncaName: 'ECGOST3410-2015', version: 2012, length: 256, curve: nca256, curveOid: '1.2.398.3.10.1.1.2.1.1', hash: O.hash256, signature: O.sig256 },
+  [O.gost2004]: { label: 'ГОСТ 34.310-2004', kncaName: 'ECGOST34310', version: 2001, length: 256, namedCurve: 'S-256-A', curveOid: '1.2.398.3.10.1.1.1.1.1', hash: O.hash2004, signature: O.sig2004 }
 };
 export function gostEngine(scheme) {
   // The input to this engine is already a digest; do not enable its internal hash.
@@ -36,6 +36,17 @@ function distinguishedName(node) {
     const value = nameValue(seq(set(entry)), id);
     const escaped = value.replace(/[\\,+=<>;"#]/g, '\\$&').replace(/^ | $/g, '\\$&');
     return `${aliases[id] || id}=${escaped}`;
+  }).join('+')).join(',');
+}
+
+// Forward RDN order with Kalkan's X509Name symbols and escaping, as NCALayer getKeyInfo prints it.
+const KNCA_SYMBOLS = { '2.5.4.6': 'C', '2.5.4.8': 'S', '2.5.4.7': 'L', '2.5.4.10': 'O', '2.5.4.11': 'OU', '2.5.4.12': 'T', '2.5.4.15': 'BusinessCategory',
+  '1.2.840.113549.1.9.1': 'E', '2.5.4.3': 'CN', '2.5.4.4': 'SURNAME', '2.5.4.42': 'G', '2.5.4.5': 'SERIALNUMBER', '0.9.2342.19200300.100.1.25': 'DC',
+  '0.9.2342.19200300.100.1.1': 'UID', '2.5.4.9': 'STREET', '2.5.4.46': 'DN', '2.5.4.17': 'PostalCode' };
+function kncaDistinguishedName(node) {
+  return node.value.map(rdn => rdn.value.map(entry => {
+    const id = oidValue(entry.value[0]);
+    return `${KNCA_SYMBOLS[id] || id}=${nameValue(seq(set(entry)), id).replace(/ +$/, '').replace(/[\\,+=<>;"]/g, '\\$&')}`;
   }).join('+')).join(',');
 }
 
@@ -80,7 +91,7 @@ export function certificateInfo(raw) {
     if (id === '2.5.29.37') ekuCritical = critical;
     if (critical && !['2.5.29.15', '2.5.29.19', '2.5.29.37'].includes(id)) unknownCritical.push(id);
   }
-  const algorithm = keyOid === O.rsa ? { label: 'RSA · SHA-256', hash: O.sha256, signature: O.rsa } : schemes[keyOid];
+  const algorithm = keyOid === O.rsa ? { label: 'RSA · SHA-256', kncaName: 'RSA', hash: O.sha256, signature: O.rsa } : schemes[keyOid];
   if (!algorithm) {
     const error = new Error(`Алгоритм ключа ${keyOid} пока не поддерживается.`);
     error.code = 'UNSUPPORTED_CERTIFICATE_ALGORITHM';
@@ -105,7 +116,10 @@ export function certificateInfo(raw) {
       subjectDn: distinguishedName(subject), issuerDn: distinguishedName(tbs[offset + 2]),
       notBefore: dateValue(validity[0]).toISOString(), notAfter: dateValue(validity[1]).toISOString(),
       serialNumber: forge.util.bytesToHex(serial.value), algorithm: algorithm.label, extendedKeyUsageOids: [...eku],
-      certificate: forge.util.encode64(der(certificate))
+      certificate: forge.util.encode64(der(certificate)),
+      knca: { keyId: subjectKeyId && forge.util.bytesToHex(subjectKeyId), authorityKeyIdentifier: subjectKeyId && authorityKeyId ? forge.util.bytesToHex(authorityKeyId) : null,
+        subjectCn: nameValue(subject, '2.5.4.3').replace(/ +$/, ''), subjectDn: kncaDistinguishedName(subject),
+        issuerCn: nameValue(tbs[offset + 2], '2.5.4.3').replace(/ +$/, ''), issuerDn: kncaDistinguishedName(tbs[offset + 2]), algorithm: algorithm.kncaName }
     }
   };
 }

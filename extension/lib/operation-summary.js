@@ -1,9 +1,14 @@
 // The confirmation window promises the public certificate only: local trust and revocation
 // results (check times, sources, fallbacks) stay in the extension.
-const KEY_INFO_FIELDS = ['name', 'iin', 'bin', 'organization', 'issuer', 'subjectDn', 'issuerDn', 'notBefore', 'notAfter', 'serialNumber', 'algorithm', 'extendedKeyUsageOids', 'certificate'];
+const KEY_INFO_FIELDS = ['name', 'iin', 'bin', 'organization', 'issuer', 'notBefore', 'notAfter', 'serialNumber', 'extendedKeyUsageOids', 'certificate'];
+// NCALayer Common Utils field names and formats win where they overlap, and fields it cannot read are left out.
+// There is no key store alias to report.
 export function keyInfoResult(certificate) {
   const result = Object.fromEntries(KEY_INFO_FIELDS.map(field => [field, certificate[field]]));
-  return { ...result, extendedKeyUsageOids: [...certificate.extendedKeyUsageOids], cert: certificate.certificate };
+  return { ...result, extendedKeyUsageOids: [...certificate.extendedKeyUsageOids], cert: certificate.certificate,
+    ...Object.fromEntries(Object.entries(certificate.knca).filter(([, value]) => value !== null)),
+    certNotBefore: String(Date.parse(certificate.notBefore)), certNotAfter: String(Date.parse(certificate.notAfter)),
+    pem: `-----BEGIN CERTIFICATE-----\n${certificate.certificate.match(/.{1,64}/g).join('\n')}\n-----END CERTIFICATE-----\n` };
 }
 
 // Recognize only complete, known service payloads on their exact origins.
