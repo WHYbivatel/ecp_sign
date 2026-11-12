@@ -6,7 +6,9 @@ import java.security.*;
 import java.security.cert.X509Certificate;
 import java.util.*;
 import kz.gov.pki.kalkan.asn1.ASN1Object;
+import kz.gov.pki.kalkan.asn1.ASN1Sequence;
 import kz.gov.pki.kalkan.asn1.ASN1Set;
+import kz.gov.pki.kalkan.asn1.DERString;
 import kz.gov.pki.kalkan.asn1.DERObjectIdentifier;
 import kz.gov.pki.kalkan.asn1.pkcs.Attribute;
 import kz.gov.pki.kalkan.asn1.pkcs.CertificationRequestInfo;
@@ -55,6 +57,11 @@ public class IssuanceInterop {
       System.out.println("EXTENSION " + id.getId() + " critical=" + extension.isCritical());
       if (id.getId().equals("2.5.29.17")) for (GeneralName name : GeneralNames.getInstance(ASN1Object.fromByteArray(extension.getValue().getOctets())).getNames())
        System.out.println("SAN " + name.getTagNo() + " " + name.getName());
+      if (id.getId().equals("1.2.398.3.3.5")) {
+       ASN1Sequence storage = ASN1Sequence.getInstance(ASN1Object.fromByteArray(extension.getValue().getOctets()));
+       Object path = storage.getObjectAt(1);
+       System.out.println("STORAGE " + storage.size() + " " + DERObjectIdentifier.getInstance(storage.getObjectAt(0)).getId() + " " + path.getClass().getSimpleName() + " '" + ((DERString) path).getString() + "'");
+      }
      }
     }
     break;

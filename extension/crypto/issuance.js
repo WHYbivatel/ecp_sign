@@ -15,6 +15,7 @@ const hex = value => [...value].map(byte => byte.toString(16).padStart(2, '0')).
 const sha256 = async data => new Uint8Array(await crypto.subtle.digest('SHA-256', data));
 const RSA_SIGNATURE = '1.2.840.113549.1.1.11';
 const EXTENSION_REQUEST = '1.2.840.113549.1.9.14';
+const STORAGE_EXTENSION = '1.2.398.3.3.5', FILE_STORAGE = '1.2.398.3.3.5.1.1';
 // Final container: PBES2 AES-256-CBC with PBKDF2-HMAC-SHA256 and an HMAC-SHA256 MAC.
 // The official Kalkan provider opens this profile (tests/kalkan-issuance.mjs).
 export const PKCS12_ITERATIONS = 100000;
@@ -93,7 +94,13 @@ function publicInfo(spki) {
 
 // PKCS#10 (RFC 2986). An e-mail outside the subject goes to an rfc822Name alternative name.
 export async function createCsr(key, dn, { email } = {}) {
-  const attributes = email ? [seq(oid(EXTENSION_REQUEST), set(seq(seq(oid('2.5.29.17'), octet(der(seq(A.create(A.Class.CONTEXT_SPECIFIC, 1, false, email))))))))] : [];
+  const extensions = [
+    ...(email ? [seq(oid('2.5.29.17'), octet(der(seq(A.create(A.Class.CONTEXT_SPECIFIC, 1, false, email)))))] : []),
+    // NCALayer 1.4 always adds this non-critical extension: file storage type and its folder. The
+    // browser cannot know the folder, so the path is an empty UTF8String.
+    seq(oid(STORAGE_EXTENSION), octet(der(seq(oid(FILE_STORAGE), A.create(0, A.Type.UTF8, false, '')))))
+  ];
+  const attributes = [seq(oid(EXTENSION_REQUEST), set(seq(...extensions)))];
   const info = seq(integer(0), encodeName(dn), key.spki, A.create(A.Class.CONTEXT_SPECIFIC, 0, true, attributes));
   const infoDer = bytes(der(info));
   const signature = await signWith(key, infoDer);

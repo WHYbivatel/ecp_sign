@@ -50,7 +50,8 @@ try {
     const csrPath = join(folder, 'tegin.csr');
     writeFileSync(csrPath, csr);
     assert.match(run('IssuanceInterop', 'csr', csrPath), /KALKAN CSR VALID/);
-    if (email) assert.deepEqual(kalkanView(csr).filter(line => /^(ATTRIBUTE|EXTENSION 2\.5\.29\.17|SAN)/.test(line)), ['ATTRIBUTE 1.2.840.113549.1.9.14', 'EXTENSION 2.5.29.17 critical=false', `SAN 1 ${email}`]);
+    assert.deepEqual(kalkanView(csr).slice(1), ['ATTRIBUTE 1.2.840.113549.1.9.14', ...(email ? ['EXTENSION 2.5.29.17 critical=false', `SAN 1 ${email}`] : []),
+      'EXTENSION 1.2.398.3.3.5 critical=false', "STORAGE 2 1.2.398.3.3.5.1.1 DERUTF8String ''"]);
     // Structure next to a request Kalkan generates itself from the same subject.
     const kalkanPath = join(folder, 'kalkan.csr');
     run('IssuanceInterop', 'request', profile, dnPath, kalkanPath);
@@ -111,7 +112,9 @@ try {
     assert.equal(ourView[0], theirView[0]);
     assert.deepEqual(ourView.filter(line => line.startsWith('SAN')), theirView.filter(line => line.startsWith('SAN')));
     const theirExtensions = theirView.filter(line => line.startsWith('EXTENSION')), ourExtensions = ourView.filter(line => line.startsWith('EXTENSION'));
-    assert.deepEqual(ourExtensions, theirExtensions.filter(line => !line.startsWith('EXTENSION 1.2.398.3.3.5 ')));
-    console.log(`PASS NCALayer reference ${index + 1}: Kalkan reads the same subject${call.args.email ? ', SAN rfc822Name' : ''} and algorithms in the Tegin request; PEM layout matches; NCALayer adds only its storage extension 1.2.398.3.3.5`);
+    assert.deepEqual(ourExtensions, theirExtensions);
+    assert.deepEqual(ourView.filter(line => line.startsWith('STORAGE')), ["STORAGE 2 1.2.398.3.3.5.1.1 DERUTF8String ''"]);
+    assert.match(theirView.find(line => line.startsWith('STORAGE')), /^STORAGE 2 1\.2\.398\.3\.3\.5\.1\.1 DERUTF8String '\/tmp\/ncl\/out2?'$/);
+    console.log(`PASS NCALayer reference ${index + 1}: Kalkan reads the same subject${call.args.email ? ', SAN rfc822Name' : ''}, algorithms and storage extension 1.2.398.3.3.5 (file, UTF8String path; Tegin leaves it empty); PEM layout matches`);
   }
 } finally { rmSync(folder, { recursive: true, force: true }); }

@@ -112,6 +112,30 @@ function opensslIssue(csrPem) {
   } finally { rmSync(folder, { recursive: true, force: true }); }
 }
 
+// The NCALayer storage extension 1.2.398.3.3.5 = SEQUENCE { 1.2.398.3.3.5.1.1 (file), UTF8String folder }.
+function storageNode(attributes) {
+  const [request] = attributes.value;
+  assert.equal(forge.asn1.derToOid(request.value[0].value), '1.2.840.113549.1.9.14');
+  const extensions = request.value[1].value[0].value;
+  const storage = extensions.filter(item => forge.asn1.derToOid(item.value[0].value) === '1.2.398.3.3.5');
+  assert.equal(storage.length, 1);
+  assert.equal(storage[0], extensions.at(-1), 'storage extension comes last');
+  assert.equal(storage[0].value.length, 2, 'non-critical: no BOOLEAN');
+  const inner = parse(storage[0].value[1].value);
+  assert.equal(inner.value.length, 2);
+  assert.equal(forge.asn1.derToOid(inner.value[0].value), '1.2.398.3.3.5.1.1');
+  assert.equal(inner.value[1].type, forge.asn1.Type.UTF8);
+  return { extension: storage[0], inner };
+}
+const storagePath = attributes => forge.util.decodeUtf8(storageNode(attributes).inner.value[1].value);
+function withStoragePath(attributes, path) {
+  const copy = parse(der(attributes));
+  const { extension, inner } = storageNode(copy);
+  inner.value[1].value = forge.util.encodeUtf8(path);
+  extension.value[1].value = der(inner);
+  return der(copy);
+}
+
 test('requests match NCALayer 1.4 generateCsr on the same synthetic fields: subject order and types, SAN, algorithms, PEM', async () => {
   for (const n of [1, 2, 3]) {
     const { request: call, response } = JSON.parse(readFileSync(new URL(`fixtures/ncalayer-generate/exchange-${n}.json`, import.meta.url), 'utf8'));
@@ -124,9 +148,10 @@ test('requests match NCALayer 1.4 generateCsr on the same synthetic fields: subj
     assert.equal(der(ourInfo.value[1]), der(theirInfo.value[1]), `subject ${n}`);
     assert.equal(der(ourInfo.value[2].value[0]), der(theirInfo.value[2].value[0]));
     assert.equal(der(ourAlgorithm), der(theirAlgorithm));
-    const extensions = info => info.value[3].value.length ? info.value[3].value[0].value[1].value[0].value.map(item => der(item)) : [];
-    const san = list => list.filter(item => item.includes(der(forge.asn1.create(0, forge.asn1.Type.OID, false, forge.asn1.oidToDer('2.5.29.17').getBytes()))));
-    assert.deepEqual(san(extensions(ourInfo)), san(extensions(theirInfo)), `SAN ${n}`);
+    // extensionRequest: SAN (when e-mail is outside the DN), then the storage extension; only the folder differs.
+    assert.equal(der(ourInfo.value[3]), withStoragePath(theirInfo.value[3], ''), `attributes ${n}`);
+    assert.equal(storagePath(ourInfo.value[3]), '');
+    assert.match(storagePath(theirInfo.value[3]), /^\/tmp\/ncl\/out2?$/);
     for (const pem of [generated.pems[0], response.body.pems[0]]) assert.match(pem, /^-----BEGIN CERTIFICATE REQUEST-----\n([A-Za-z0-9+/]{64}\n)*[A-Za-z0-9+/=]{1,64}\n-----END CERTIFICATE REQUEST-----\n$/);
   }
 });
