@@ -29,7 +29,7 @@ test('the fallback timer answers in the form of the request module', async () =>
   for (const timer of bridge.timers) timer.run();
   assert.deepEqual(JSON.parse(JSON.stringify(bridge.replies.map(({ id, response }) => ({ id, response })))), [
     { id: 'b1', response: { status: true, body: {} } },
-    { id: 'c1', response: { code: '500', message: 'Время подтверждения истекло.' } }
+    { id: 'c1', response: { code: '500', message: 'action.canceled' } }
   ]);
   assert.deepEqual(bridge.sent.filter(message => message.kind === 'nca:cancel-request').length, 2);
 });

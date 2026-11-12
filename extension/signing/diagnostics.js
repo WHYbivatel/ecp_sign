@@ -25,6 +25,7 @@ export function responseCode(response) {
   if (!response || typeof response !== 'object') return 'none';
   if (response.status === false) return name(response.code) || 'error';
   if (response.status === true) return response.body && typeof response.body === 'object' && !Object.keys(response.body).length ? 'cancelled' : 'ok';
+  if (response.code === '500' && response.message === 'action.canceled') return 'cancelled';
   return name(response.code) || 'none';
 }
 

@@ -66,10 +66,18 @@ export function normalizeRequest(input) {
 }
 
 export function successResponse(input, result) {
-  return adapterResponse(input, result) || (input.module === BASICS ? { status: true, body: result } : { code: '200', message: '', responseObject: result });
+  return adapterResponse(input, result) || (input.module === BASICS ? { status: true, body: result }
+    : input.module === COMMON ? commonResponse(input, input.method === 'changeLocale' ? { code: '200' } : { code: '200', responseObject: result })
+      : { code: '200', message: '', responseObject: result });
+}
+// NCALayer Common Utils answers every failure with code 500, omits empty fields and echoes a uuid.
+function commonResponse(input, fields) {
+  const uuid = typeof input.uuid === 'number' ? String(input.uuid) : input.uuid;
+  return typeof uuid === 'string' && uuid ? { ...fields, uuid } : fields;
 }
 export function errorResponse(input, message, cancelled = false) {
   return adapterResponse(input, undefined, message, cancelled) || (input?.module === BASICS
     ? (cancelled ? { status: true, body: {} } : { status: false, code: 'UNSUPPORTED_OR_FAILED', message })
-    : { code: cancelled ? '500' : '400', message, responseObject: null });
+    : input?.module === COMMON ? commonResponse(input, { code: '500', message: cancelled ? 'action.canceled' : message })
+      : { code: cancelled ? '500' : '400', message, responseObject: null });
 }

@@ -24,6 +24,12 @@ test('response formats preserve the two protocol families and cancellation', () 
   assert.deepEqual(successResponse({ module: common }, 'signature').responseObject, 'signature');
   assert.deepEqual(successResponse({ module: basics }, { result: ['signature'] }).body.result, ['signature']);
   assert.equal(errorResponse({ module: common }, 'cancel', true).code, '500');
+});
+test('Common Utils responses follow the NCALayer Common Bundle 0.3.4 shape', () => {
+  assert.deepEqual(successResponse({ module: common, method: 'getKeyInfo', uuid: 'u-1' }, { a: 1 }), { code: '200', responseObject: { a: 1 }, uuid: 'u-1' });
+  assert.deepEqual(successResponse({ module: common, method: 'changeLocale', args: ['kk'] }, true), { code: '200' });
+  assert.deepEqual(errorResponse({ module: common, method: 'signXml', uuid: 7 }, 'reason'), { code: '500', message: 'reason', uuid: '7' });
+  assert.deepEqual(errorResponse({ module: common, method: 'signXml', uuid: '' }, 'reason', true), { code: '500', message: 'action.canceled' });
   assert.deepEqual(errorResponse({ module: basics }, 'cancel', true), { status: true, body: {} });
 });
 

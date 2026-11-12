@@ -212,7 +212,7 @@ try {
   assert.equal(await popup.locator('#approve').isDisabled(), true);
   await popup.locator('#cancel').click();
   answer = await result();
-  assert.equal(answer.code, '500'); assert.equal(answer.responseObject, null);
+  assert.deepEqual(answer, { code: '500', message: 'action.canceled' });
   expiredKey.container.fill(0);
   console.log('PASS: expired disposable certificate: error shown, diagnostic visible beside the certificate card, CERTIFICATE_NOT_VALID_NOW/certificate, copy works, approval disabled, cleared on key change');
 
@@ -783,7 +783,7 @@ try {
   const recordWindow = item => unexpectedWindows.push(item.url());
   context.on('page', recordWindow);
   await clientPage.evaluate(() => settle(client.getKeyInfo('AKKaztokenStore')));
-  assert.match((await clientResult()).error, /^400: /);
+  assert.match((await clientResult()).error, /^500: /);
   await clientPage.evaluate(xml => settle(client.basicsSignXML(NCALayerClient.basicsStoragePKCS12, xml, { tsaProfile: {} }, NCALayerClient.basicsSignerTestAny)), egovLogin.request.args.data);
   assert.match((await clientResult()).error, /^UNSUPPORTED_OR_FAILED: Метка времени/);
   await clientPage.evaluate(() => settle(client.basicsSignXML(['AKKaztokenStore'], '<a/>', {}, NCALayerClient.basicsSignerTestAny)));

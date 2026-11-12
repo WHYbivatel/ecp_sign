@@ -36,7 +36,8 @@ test('response codes distinguish refusal, cancellation and success', () => {
   assert.equal(responseCode(errorResponse(generate, 'x', true)), 'cancelled');
   assert.equal(responseCode({ status: true, body: { pems: ['x'] } }), 'ok');
   assert.equal(responseCode({ code: '200', message: '', responseObject: 1 }), '200');
-  assert.equal(responseCode(errorResponse({ module: 'kz.gov.pki.knca.commonUtils' }, 'x')), '400');
+  assert.equal(responseCode(errorResponse({ module: 'kz.gov.pki.knca.commonUtils' }, 'x')), '500');
+  assert.equal(responseCode(errorResponse({ module: 'kz.gov.pki.knca.commonUtils' }, 'x', true)), 'cancelled');
 });
 
 test('the page channel is private to this version and an older adapter is reported', async () => {

@@ -23,7 +23,7 @@
     const timer = setTimeout(() => {
       inflight.delete(token);
       // Same answer as the background alarm: a basics client reads an empty body as cancellation.
-      reply(id, request?.module === 'kz.gov.pki.knca.basics' ? { status: true, body: {} } : { code: '500', message: 'Время подтверждения истекло.' });
+      reply(id, request?.module === 'kz.gov.pki.knca.basics' ? { status: true, body: {} } : { code: '500', message: 'action.canceled' });
       api.runtime.sendMessage({ kind: 'nca:cancel-request', instance, token }).catch(() => {});
     }, 185000);
     inflight.set(token, { id, timer });
