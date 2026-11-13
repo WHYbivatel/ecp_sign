@@ -98,7 +98,7 @@ ARM64 и Linux x64 — зелёный, [прогон 43264129911](https://github
 | Google Chrome, Microsoft Edge | Windows x64 | прошёл, включая лимиты файлов (`e2e-limits.mjs`) | CI, `530a4ae`, прогон 43406139369 |
 | Google Chrome | macOS ARM64 | прошёл, включая лимиты файлов | CI, `530a4ae`, прогон 43406139369 |
 | Firefox 160 (обычная сборка `dist/firefox`) | Linux x64 | окно «Подписать файл», `tests/e2e-signing-firefox.mjs`: 6/6, с живыми службами НУЦ 7/7 | сервер разработки, 13.11.2026 |
-| Firefox (CI, задача `full-e2e-browsers`) | Windows x64, macOS ARM64, Linux x64 | тот же тест, ждёт прогона CI | CI |
+| Firefox (CI, задача `full-e2e-browsers`) | Windows x64, macOS ARM64, Linux x64 | `tests/e2e-signing-firefox.mjs` прошёл на каждой (без живых служб НУЦ) | CI, `3c787e9`, прогон 43419377139 |
 
 Firefox проходит не весь `tests/e2e.mjs`, а отдельный тест окна «Подписать файл» (`tests/e2e-signing-firefox.mjs`)
 на обычной сборке. В нём CMS с документом внутри и отдельная CMS проверяются OpenSSL (у отдельной подписи
