@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { normalizeIssuance, issuanceOrigin, issuanceResult, issuanceError, isIssuanceRequest, PASSWORD_RULE } from '../extension/signing/issuance-protocol.js';
-import { generateRequest, verifyCsr, inspectCertificates, installCertificates, unsealKeys, sealKeys, keyIdentity, encodeName } from '../extension/crypto/issuance.js';
+import { generateRequest, verifyCsr, inspectCertificates, installCertificates, unsealKeys, sealKeys, keyIdentity, encodeName, generateKey, keySpec, kalkanCompatiblePoint } from '../extension/crypto/issuance.js';
 import { openContainer } from '../extension/crypto/signer.js';
 import { signCms } from '../extension/crypto/cms.js';
 import { verifyCms } from '../extension/crypto/cms-verify.js';
@@ -58,6 +58,24 @@ test('generateCsr and importCertificate are normalized in the shape the NUC port
   assert.deepEqual(normalizeIssuance(importCall([pem, pem.replaceAll('\n', '<br>'), pem.replaceAll('\n', '\r\n')])).certificates, ['MIIBAA==', 'MIIBAA==', 'MIIBAA==']);
   fails(importCall([]), 'COMMON');
   fails(importCall(['-----BEGIN CERTIFICATE-----\n<script>\n-----END CERTIFICATE-----']), 'COMMON');
+});
+
+test('GOST keys follow the Kalkan generator rule: no coordinate starts or ends with a zero byte', async () => {
+  const point = (length, zero) => { const value = new Uint8Array(length).fill(7); if (zero !== undefined) value[zero] = 0; return value; };
+  assert.equal(kalkanCompatiblePoint(point(128)), true);
+  for (const index of [0, 63, 64, 127]) assert.equal(kalkanCompatiblePoint(point(128, index)), false, `zero at ${index}`);
+  assert.equal(kalkanCompatiblePoint(point(128, 1)), true);
+  for (const index of [0, 31, 32, 63]) assert.equal(kalkanCompatiblePoint(point(64, index)), false, `GOST-256: zero at ${index}`);
+  // A rejected draw is wiped and the next one is used.
+  const draws = [point(128, 63), point(128)].map(publicKey => ({ publicKey: publicKey.buffer, privateKey: new Uint8Array(64).fill(9).buffer }));
+  const handed = draws.map(draw => new Uint8Array(draw.privateKey));
+  const engine = { generateKey: () => draws.shift() };
+  const key = await generateKey(keySpec({ algorithm: 'ECGOST3410-2015', length: 512 }), { engine });
+  assert.equal(draws.length, 0);
+  assert.equal(kalkanCompatiblePoint(key.point), true);
+  assert.ok(handed.every(value => value.every(byte => byte === 0)), 'private keys handed out by the engine are wiped');
+  assert.ok(key.scalar.every(byte => byte === 9));
+  for (const length of [512, 256]) assert.equal(kalkanCompatiblePoint((await generateKey(keySpec({ algorithm: 'ECGOST3410-2015', length }))).point), true);
 });
 
 test('key issuance is limited to the NUC request portal in the top-level frame', () => {

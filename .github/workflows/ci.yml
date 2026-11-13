@@ -324,6 +324,7 @@ jobs:
           if-no-files-found: ignore
 
   # The same full E2E (CMS, CAdES-T, XML, PAdES, CAdES-LT/LTA, password change, modules) in branded browsers.
+  # Firefox: the local signing window (CMS, detached CMS, XML, PAdES) with the same independent checks.
   full-e2e-browsers:
     name: full E2E · ${{ matrix.browser }} · ${{ matrix.os }}
     needs: unit
@@ -334,6 +335,9 @@ jobs:
           - { os: windows-latest, browser: chrome }
           - { os: windows-latest, browser: msedge }
           - { os: macos-latest, browser: chrome }
+          - { os: windows-latest, browser: firefox }
+          - { os: macos-latest, browser: firefox }
+          - { os: ubuntu-latest, browser: firefox }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     env:
@@ -369,8 +373,25 @@ jobs:
           fi
       - run: npm ci
       - name: Browser
+        if: matrix.browser != 'firefox'
         shell: bash
         run: npx playwright install "$TEGIN_BROWSER" || true
+      - name: Firefox stable cache
+        if: matrix.browser == 'firefox'
+        uses: actions/cache@v4
+        with:
+          path: .browsers
+          key: firefox-stable-${{ runner.os }}-${{ runner.arch }}
+      - name: Kalkan XMLDSig and knca_provider_util (official NCALayer archive, pinned SHA-256)
+        if: matrix.browser == 'firefox'
+        uses: actions/cache@v4
+        with:
+          path: .kalkan
+          key: kalkan-xml-0.7.8-5588f9ae-72c273d3-613e8ecf-49c4af31
+      - name: XML verifier for Firefox
+        if: matrix.browser == 'firefox'
+        shell: bash
+        run: node scripts/fetch-kalkan.mjs .kalkan --xml >> "$GITHUB_ENV"
       - run: pip install pyHanko==0.38.0 pyhanko-certvalidator==0.33.0 asn1crypto==1.5.1
       - name: EU DSS 6.5.1 validator (tests/interop/dss)
         shell: bash
@@ -379,9 +400,14 @@ jobs:
           javac -cp "$RUNNER_TEMP/dss/lib/*" -d "$RUNNER_TEMP/dss/classes" tests/interop/dss/Validate.java
           echo "DSS_VALIDATOR=$RUNNER_TEMP/dss" >> "$GITHUB_ENV"
       - run: npm run build
-      - run: node tests/e2e.mjs
+      - if: matrix.browser != 'firefox'
+        run: node tests/e2e.mjs
       - name: File limits at the boundary, cancellation, retry
+        if: matrix.browser != 'firefox'
         run: node tests/e2e-limits.mjs
+      - name: Local signing window in Firefox (CMS, detached CMS, XML by Kalkan, PAdES by DSS and pyHanko)
+        if: matrix.browser == 'firefox'
+        run: node tests/e2e-signing-firefox.mjs
       - name: Screenshots on failure
         if: failure()
         uses: actions/upload-artifact@v4
