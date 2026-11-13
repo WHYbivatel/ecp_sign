@@ -40,36 +40,66 @@ for (const step of [
   'Откройте Tegin Sign и выберите «Подписать файл» или «Проверить подпись».',
 ]) assert.ok(html.includes(step), `installation instruction is missing: ${step}`);
 
-const chromium = metadata.releases.find(({ platform }) => platform === 'chromium');
-assert.ok(chromium, 'Chromium release is missing from releases.json');
-assert.deepEqual(chromium.browsers, ['chrome', 'edge']);
-assert.match(chromium.version, /^\d+\.\d+\.\d+$/);
-assert.match(chromium.sourceCommit, /^[a-f0-9]{7,40}$/);
-for (const build of [chromium, chromium.rollback]) {
-  assert.ok(build, 'Chromium rollback build is missing from releases.json');
-  assert.equal(build.file, `tegin-chromium-${build.version}-${build.sourceCommit}.zip`, 'Chromium archive name must carry the source commit');
-  assert.equal(build.url, `https://tegin.esl.kz/downloads/${build.file}`);
-  assert.match(build.sha256, /^[a-f0-9]{64}$/);
-  assert.ok(Number.isSafeInteger(build.size) && build.size > 0);
+// Extension archives carry the source commit in the name: /downloads/ is served immutable for a year.
+// A rollback build published before that rule keeps its plain name and has no sourceCommit.
+const extensions = {
+  chromium: { browsers: ['chrome', 'edge'], button: 'Скачать для Chrome и Edge', label: 'Chrome и Edge' },
+  firefox: { browsers: ['firefox'], button: 'Скачать для Firefox', label: 'Firefox' },
+};
+const builds = {};
+for (const [platform, { browsers, button, label }] of Object.entries(extensions)) {
+  const current = metadata.releases.find((release) => release.platform === platform);
+  assert.ok(current, `${platform} release is missing from releases.json`);
+  assert.deepEqual(current.browsers, browsers);
+  assert.match(current.version, /^\d+\.\d+\.\d+$/);
+  assert.match(current.sourceCommit, /^[a-f0-9]{7,40}$/);
+  assert.match(current.publishedAt, /^\d{4}-\d{2}-\d{2}$/);
+  assert.ok(current.rollback, `${platform} rollback build is missing from releases.json`);
+  for (const build of [current, current.rollback]) {
+    const name = build.sourceCommit ? `tegin-${platform}-${build.version}-${build.sourceCommit}.zip` : `tegin-${platform}-${build.version}.zip`;
+    assert.equal(build.file, name, `${platform} archive name must carry the source commit`);
+    assert.equal(build.url, `https://tegin.esl.kz/downloads/${build.file}`);
+    assert.match(build.sha256, /^[a-f0-9]{64}$/);
+    assert.ok(Number.isSafeInteger(build.size) && build.size > 0);
+  }
+  assert.ok(current.file.endsWith(`-${current.sourceCommit}.zip`), `${platform} current archive must carry the source commit`);
+  assert.notEqual(current.file, current.rollback.file, 'rollback must be a different archive');
+  const link = new RegExp(
+    `<a\\b(?=[^>]*data-release-platform="${platform}")(?=[^>]*href="/downloads/${current.file}")(?=[^>]*download="${current.file}")[^>]*>[\\s\\S]*?${button}[\\s\\S]*?<\\/a>`,
+  );
+  assert.match(html, link, `${platform} download link differs from releases.json`);
+  assert.ok(html.includes(`${label} ${current.version} (сборка ${current.sourceCommit})`), `${platform} version label is stale`);
+  builds[platform] = current;
 }
-assert.notEqual(chromium.file, chromium.rollback.file, 'rollback must be a different archive');
-assert.match(chromium.publishedAt, /^\d{4}-\d{2}-\d{2}$/);
-const chromiumLink = new RegExp(
-  `<a\\b(?=[^>]*data-release-platform="chromium")(?=[^>]*href="/downloads/${chromium.file}")(?=[^>]*download="${chromium.file}")[^>]*>[\\s\\S]*?Скачать для Chrome и Edge[\\s\\S]*?<\\/a>`,
-);
-assert.match(html, chromiumLink, 'Chromium download link differs from releases.json');
-assert.ok(html.includes(`Chrome и Edge ${chromium.version} (сборка ${chromium.sourceCommit})`), 'Chromium version label is stale');
-assert.ok(html.includes('/downloads/tegin-firefox-0.5.2.zip'), 'Firefox download link was removed');
+const { chromium, firefox } = builds;
+assert.equal(firefox.addonId, 'ncabrowser@local.invalid', 'the site build keeps the add-on ID its users have: storage is tied to it');
 
-const chromiumZip = valueFor('--chromium-zip');
-if (chromiumZip) {
-  const bytes = await readFile(path.resolve(chromiumZip));
-  assert.equal(bytes.length, chromium.size, 'Chromium archive byte size differs from releases.json');
-  assert.equal(createHash('sha256').update(bytes).digest('hex'), chromium.sha256, 'Chromium archive SHA-256 differs from releases.json');
-  const { execFileSync } = await import('node:child_process');
-  const manifest = JSON.parse(execFileSync('unzip', ['-p', path.resolve(chromiumZip), 'manifest.json'], { encoding: 'utf8' }));
-  assert.equal(manifest.version, chromium.version, 'Chromium manifest version differs from releases.json');
+const { execFileSync } = await import('node:child_process');
+for (const platform of Object.keys(extensions)) {
+  const archive = valueFor(`--${platform}-zip`);
+  if (!archive) continue;
+  const build = builds[platform];
+  const bytes = await readFile(path.resolve(archive));
+  assert.equal(bytes.length, build.size, `${platform} archive byte size differs from releases.json`);
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), build.sha256, `${platform} archive SHA-256 differs from releases.json`);
+  const manifest = JSON.parse(execFileSync('unzip', ['-p', path.resolve(archive), 'manifest.json'], { encoding: 'utf8' }));
+  assert.equal(manifest.version, build.version, `${platform} manifest version differs from releases.json`);
   assert.equal(manifest.manifest_version, 3);
+  if (platform === 'firefox') assert.equal(manifest.browser_specific_settings.gecko.id, build.addonId);
+}
+
+// dist/release.json from scripts/package.mjs: the site offers exactly the archives built from the stated commit.
+const releasePath = valueFor('--release');
+if (releasePath) {
+  const release = JSON.parse(await readFile(path.resolve(releasePath), 'utf8'));
+  assert.equal(release.clean, true, 'release archives were built from a tree with uncommitted changes');
+  for (const build of Object.values(builds)) {
+    assert.equal(release.version, build.version, `${build.platform} version differs from the packaged release`);
+    assert.ok(release.commit.startsWith(build.sourceCommit), `${build.platform} sourceCommit ${build.sourceCommit} is not the packaged commit ${release.commit}`);
+    const artifact = release.artifacts[`tegin-${build.platform}-${build.version}.zip`];
+    assert.ok(artifact, `${build.platform} archive is missing from the packaged release`);
+    assert.deepEqual({ size: build.size, sha256: build.sha256 }, artifact, `${build.platform} archive differs from the packaged release`);
+  }
 }
 
 const apkPath = valueFor('--apk');
@@ -95,4 +125,4 @@ if (docRoot) {
 }
 
 console.log(`Release metadata consistent: Android ${android.version} (${android.size} bytes, SHA-256 ${android.sha256})`);
-console.log(`Release metadata consistent: Chromium ${chromium.version} from ${chromium.sourceCommit} (${chromium.size} bytes, SHA-256 ${chromium.sha256})`);
+for (const build of [chromium, firefox]) console.log(`Release metadata consistent: ${build.platform} ${build.version} from ${build.sourceCommit} (${build.size} bytes, SHA-256 ${build.sha256}); rollback ${build.rollback.file}`);

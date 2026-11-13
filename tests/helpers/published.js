@@ -1,19 +1,23 @@
 // Builds that tegin.esl.kz actually serves, fetched over HTTPS and checked against pinned SHA-256.
-// Chromium entries come from website/releases.json; Firefox 0.5.2 predates it, so its hash is pinned here.
+// website/releases.json may already describe the next release; each pinned build must be listed there, as the
+// current or the rollback entry. Update the pins when a release goes live.
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { zipEntries } from '../../scripts/lib/zip.mjs';
 
-const site = JSON.parse(readFileSync(resolve('website/releases.json'), 'utf8'));
-const chromium = site.releases.find(release => release.platform === 'chromium');
 export const PUBLISHED = {
-  chromium: { version: chromium.version, file: chromium.file, url: chromium.url, sha256: chromium.sha256, commit: chromium.sourceCommit },
-  chromiumRollback: { ...chromium.rollback, commit: chromium.rollback.sourceCommit },
+  chromium: { version: '0.5.3', file: 'tegin-chromium-0.5.3-dd40b5e.zip', url: 'https://tegin.esl.kz/downloads/tegin-chromium-0.5.3-dd40b5e.zip',
+    sha256: 'd2872b7e06df7fe73bcbe060dd4bb85cdc0a318bbec0495300decb53a24c7651', commit: 'dd40b5e' },
   firefox: { version: '0.5.2', file: 'tegin-firefox-0.5.2.zip', url: 'https://tegin.esl.kz/downloads/tegin-firefox-0.5.2.zip',
     sha256: '4697dcab34fa3c90efcb66d8bb8b928236488840c20fb05d753150dce47e5f32' }
 };
+const site = JSON.parse(readFileSync(resolve('website/releases.json'), 'utf8'));
+for (const [platform, pinned] of Object.entries(PUBLISHED)) {
+  const entry = site.releases.find(release => release.platform === platform);
+  if (![entry, entry?.rollback].some(build => build?.file === pinned.file && build.sha256 === pinned.sha256)) throw new Error(`${pinned.file} is not in website/releases.json`);
+}
 
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
@@ -46,7 +50,8 @@ export function unpack(bytes, folder) {
 export function buildCommit(commit, target, { anchors, folder }) {
   const tree = join(folder, `src-${commit}`);
   if (!existsSync(tree)) {
-    execFileSync('git', ['worktree', 'add', '--detach', tree, commit], { stdio: 'pipe' });
+    // Windows runners check out with CRLF; the published archive was built from LF files.
+    execFileSync('git', ['-c', 'core.autocrlf=false', '-c', 'core.eol=lf', 'worktree', 'add', '--detach', tree, commit], { stdio: 'pipe' });
     execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: tree, stdio: 'pipe', shell: process.platform === 'win32' });
   }
   const env = { ...process.env }; delete env.TEGIN_TEST_ISSUANCE_ANCHORS; delete env.TEGIN_TEST_REVOCATION_ISSUERS; delete env.TEGIN_DIST;

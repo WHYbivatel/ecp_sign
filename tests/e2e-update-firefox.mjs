@@ -173,6 +173,58 @@ try {
   await approval.click('#cancel');
   console.log('PASS: adapter scripts removed while the site stays granted are registered again by the next install; the page gets the adapter without reconnecting');
 
+  // Rollback with data the candidate saved: a pending request key, then the published build, then the candidate again.
+  const PASSWORD = 'Tegin-Test-2026';
+  ({ page: helper, approval } = await extensionContext());
+  const recordKey = await approval.evaluate(password => new Promise((resolve, reject) => {
+    const id = crypto.randomUUID(), worker = new Worker(browser.runtime.getURL('crypto/worker.js'));
+    worker.onerror = () => reject(new Error('worker stopped'));
+    worker.onmessage = async ({ data }) => {
+      if (data.kind !== 'issue-generated') return reject(new Error(data.message));
+      await browser.storage.local.set({ [`issuance:${id}`]: { v: 1, id, origin: 'https://did.pki.gov.kz', created: new Date().toISOString(), algorithms: data.algorithms, identities: data.identities, status: 'requested', sealed: data.sealed } });
+      resolve(`issuance:${id}`);
+    };
+    worker.postMessage({ kind: 'issue-generate', request: { dn: [['2.5.4.3', 'ТЕСТОВ ТЕСТ']], email: '', keys: [{ algorithm: 'ECGOST3410-2015', length: 512 }] }, password, context: id });
+  }), PASSWORD);
+  const saved = await approval.evaluate(() => browser.storage.local.get(null));
+  await approval.click('#cancel');
+  await browser.close();
+
+  browser = await launch();
+  assert.equal(await browser.installExtension(old), ADDON_ID);
+  ({ page: helper, approval } = await extensionContext());
+  assert.equal(await approval.evaluate(() => browser.runtime.getManifest().version), PUBLISHED.firefox.version);
+  assert.deepEqual(await approval.evaluate(() => browser.storage.local.get(null)), saved);
+  assert.deepEqual(await approval.evaluate(() => browser.scripting.getRegisteredContentScripts()), []);
+  const before0 = await tabIds();
+  const edoOld = await site(`${SITE}/`);
+  assert.equal(await adapter(edoOld), false);
+  const [oldTab] = (await tabIds()).filter(id => !before0.includes(id));
+  const oldPopup = await open(approval, `index.html?site=${oldTab}`);
+  await oldPopup.waitForSelector('#enable:not([disabled])');
+  assert.match(await oldPopup.$eval('#site-state', node => node.textContent), /Нужно обновить/);
+  await oldPopup.click('#enable');
+  await edoOld.waitForFunction(() => window.WebSocket.__ncaBrowserAdapter === true, { timeout: 15000 });
+  await approval.click('#cancel');
+  assert.match(await nursign('https://shop.example.kz'), /не разрешён в настройках модуля/);
+  assert.match(await nursign('https://goszakup.gov.kz'), /обязательную метку/);
+  await browser.close();
+  console.log(`PASS: rollback ${version} → ${PUBLISHED.firefox.version}: storage.local unchanged, including the pending request key; module settings apply; the connected site needs «Обновить» in the popup once (that build does not rebuild its scripts)`);
+
+  browser = await launch();
+  assert.equal(await browser.installExtension(candidate), ADDON_ID);
+  ({ page: helper, approval } = await extensionContext());
+  const back = await approval.evaluate(() => browser.storage.local.get(null));
+  assert.deepEqual(back[recordKey], saved[recordKey]);
+  assert.deepEqual(back.moduleSettings, saved.moduleSettings);
+  const keys = await open(approval, 'keys/index.html');
+  await keys.waitForSelector('.key-record[data-status=requested] .key-backup');
+  assert.equal((await keys.$$('.key-record')).length, 1);
+  const edoBack = await site(`${SITE}/`);
+  await edoBack.waitForFunction(() => window.WebSocket.__ncaBrowserAdapter === true, { timeout: 15000 });
+  await approval.click('#cancel');
+  console.log(`PASS: forward again ${PUBLISHED.firefox.version} → ${version}: the pending request key is byte for byte the saved one and is listed with its backup button; settings and the connected site are there`);
+
   assert.deepEqual(errors, []);
   console.log('Firefox update E2E completed.');
 } finally {

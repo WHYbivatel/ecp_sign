@@ -17,20 +17,39 @@
     {
       "platform": "chromium",
       "browsers": ["chrome", "edge"],
-      "version": "0.5.3",
-      "file": "tegin-chromium-0.5.3-dd40b5e.zip",
-      "url": "https://tegin.esl.kz/downloads/tegin-chromium-0.5.3-dd40b5e.zip",
-      "size": 513484,
-      "sha256": "d2872b7e06df7fe73bcbe060dd4bb85cdc0a318bbec0495300decb53a24c7651",
-      "sourceCommit": "dd40b5e",
-      "publishedAt": "2026-11-12",
+      "version": "0.6.0",
+      "file": "tegin-chromium-0.6.0-5b3eae2.zip",
+      "url": "https://tegin.esl.kz/downloads/tegin-chromium-0.6.0-5b3eae2.zip",
+      "size": 508818,
+      "sha256": "9a773c63d5788efa40ba1b6753263f1a398cdab119f62c7ccf83974ce263f653",
+      "sourceCommit": "5b3eae2",
+      "publishedAt": "2026-11-13",
       "rollback": {
         "version": "0.5.3",
-        "file": "tegin-chromium-0.5.3-71a68ff.zip",
-        "url": "https://tegin.esl.kz/downloads/tegin-chromium-0.5.3-71a68ff.zip",
-        "size": 513328,
-        "sha256": "86a894068baf1e19eb3cfc0361a9a1988767ede38d62d9442cce7951df33f5c6",
-        "sourceCommit": "71a68ff"
+        "file": "tegin-chromium-0.5.3-dd40b5e.zip",
+        "url": "https://tegin.esl.kz/downloads/tegin-chromium-0.5.3-dd40b5e.zip",
+        "size": 513484,
+        "sha256": "d2872b7e06df7fe73bcbe060dd4bb85cdc0a318bbec0495300decb53a24c7651",
+        "sourceCommit": "dd40b5e"
+      }
+    },
+    {
+      "platform": "firefox",
+      "browsers": ["firefox"],
+      "addonId": "ncabrowser@local.invalid",
+      "version": "0.6.0",
+      "file": "tegin-firefox-0.6.0-5b3eae2.zip",
+      "url": "https://tegin.esl.kz/downloads/tegin-firefox-0.6.0-5b3eae2.zip",
+      "size": 508895,
+      "sha256": "96a15d8f6c781391b9080c2efb756d82bc047d03931d7d685c157dc22adff735",
+      "sourceCommit": "5b3eae2",
+      "publishedAt": "2026-11-13",
+      "rollback": {
+        "version": "0.5.2",
+        "file": "tegin-firefox-0.5.2.zip",
+        "url": "https://tegin.esl.kz/downloads/tegin-firefox-0.5.2.zip",
+        "size": 263296,
+        "sha256": "4697dcab34fa3c90efcb66d8bb8b928236488840c20fb05d753150dce47e5f32"
       }
     }
   ]
