@@ -4,15 +4,16 @@
 // nothing about a particular device, its driver or the Kazakh GOST mechanisms.
 // Needs softhsm2, opensc (pkcs11-tool), python3-pykcs11 and openssl; tests/token-softhsm.sh runs it in a
 // disposable container. Synthetic key and PIN only.
-import { spawn, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { TokenClient, tokenSigner, TOKEN_PROTOCOL } from '../extension/tokens/token-client.js';
 import { signCms } from '../extension/crypto/cms.js';
 import { verifyCms } from '../extension/crypto/cms-verify.js';
+import { spawnTokenHost } from './helpers/token-host.js';
 
 const MODULE = ['/usr/lib/softhsm/libsofthsm2.so', '/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so', '/usr/lib/aarch64-linux-gnu/softhsm/libsofthsm2.so'].find(existsSync);
 if (!MODULE) throw new Error('SoftHSM2 module not found; run tests/token-softhsm.sh');
@@ -36,31 +37,7 @@ function provision(label, name) {
   return new Uint8Array(readFileSync(join(folder, `${name}.der`)));
 }
 
-// Native Messaging framing over the child's stdio, shaped like runtime.Port.
-function host(extraEnv = {}) {
-  const child = spawn('python3', [resolve('native-host/tegin_token_host.py')], { env: { ...env, TEGIN_TOKEN_MODULES: MODULE, ...extraEnv }, stdio: ['pipe', 'pipe', 'pipe'] });
-  const listeners = { message: [], disconnect: [] }, frames = [];
-  let buffer = Buffer.alloc(0), log = '';
-  child.stdout.on('data', chunk => {
-    buffer = Buffer.concat([buffer, chunk]);
-    while (buffer.length >= 4 && buffer.length >= 4 + buffer.readUInt32LE(0)) {
-      const message = JSON.parse(buffer.subarray(4, 4 + buffer.readUInt32LE(0)).toString('utf8'));
-      buffer = buffer.subarray(4 + buffer.readUInt32LE(0));
-      frames.push(message); listeners.message.forEach(fn => fn(message));
-    }
-  });
-  child.stderr.on('data', chunk => { log += chunk; });
-  child.on('exit', () => listeners.disconnect.forEach(fn => fn()));
-  const sent = [];
-  return {
-    frames, sent, log: () => log,
-    postMessage(message) { sent.push(JSON.stringify(message)); const body = Buffer.from(JSON.stringify(message)); const header = Buffer.alloc(4); header.writeUInt32LE(body.length); child.stdin.write(Buffer.concat([header, body])); },
-    onMessage: { addListener: fn => listeners.message.push(fn) },
-    onDisconnect: { addListener: fn => listeners.disconnect.push(fn) },
-    disconnect() { child.stdin.end(); },
-    exited: new Promise(done => child.on('exit', done))
-  };
-}
+const host = (extraEnv = {}) => spawnTokenHost({ ...env, TEGIN_TOKEN_MODULES: MODULE, ...extraEnv });
 const until = async (check, what) => { for (let i = 0; i < 200; i++) { if (check()) return; await new Promise(done => setTimeout(done, 25)); } throw new Error(`timeout: ${what}`); };
 const ports = [];
 const open = (extraEnv) => { const port = host(extraEnv); ports.push(port); return { port, client: new TokenClient(port, { timeout: 30000 }) }; };

@@ -157,13 +157,15 @@ function hashesOf(node) {
 }
 // Every hash listed by an archive time-stamp must still match an item of the signature; items added
 // later (newer validation data, newer time-stamps) are allowed.
+// Returns the positions in `present` of the items the stamp lists.
 function covers(listed, present, label) {
-  const remaining = present.slice();
-  for (const hash of listed) {
-    const index = remaining.findIndex(item => equal(item, hash));
+  const used = new Set();
+  return listed.map(hash => {
+    const index = present.findIndex((item, position) => !used.has(position) && equal(item, hash));
     if (index < 0) fail(`Архивная метка времени не соответствует подписи: изменены или удалены ${label}.`);
-    remaining.splice(index, 1);
-  }
+    used.add(index);
+    return index;
+  });
 }
 
 // Re-reads a long-term signature: every archive-time-stamp-v3 is verified against its ATSHashIndexV3
@@ -189,13 +191,13 @@ async function verifyLongTermRaw(cms, { detached, anchors } = {}) {
     const [certificates, crls, values] = fields.slice(custom ? 1 : 0).map(hashesOf);
     const hash = data => digestForOid(hashOid, data);
     covers(certificates, await Promise.all(sd.certificates.map(node => hash(whole(node)))), 'сертификаты');
-    covers(crls, await Promise.all(sd.crls.map(node => hash(whole(node)))), 'данные об отзыве');
+    const revocationItems = covers(crls, await Promise.all(sd.crls.map(node => hash(whole(node)))), 'данные об отзыве');
     const earlier = attributes.filter((entry, index) => index !== position).flatMap(entry => entry.values.map(value => concat(entry.typeTlv, whole(value))));
     covers(values, await Promise.all(earlier.map(hash)), 'неподписанные атрибуты');
     // The time-stamp's own imprint algorithm hashes the content, as EN 319 122-1 and EU DSS do.
     const verified = await verifyEmbeddedTimestamp(parse(token), await archiveInput(sd, signer, signed, imprintAlgorithm(token), whole(index)), { anchors });
     archives.push({ time: verified.time, authority: verified.authority, certificates: verified.certificates, hashAlgorithm: hashOid,
-      covers: { certificates: certificates.length, revocation: crls.length, attributes: values.length } });
+      covers: { certificates: certificates.length, revocation: crls.length, attributes: values.length }, revocationItems });
   }
   return { ...countEvidence(sd), archives };
 }
@@ -203,23 +205,32 @@ function countEvidence(sd) {
   const ocsp = sd.crls.filter(node => node.tag === 0xa1).length;
   return { certificates: sd.certificates.length, crls: sd.crls.length - ocsp, ocsp };
 }
+// Raw OCSP responses and CRLs of SignedData.crls with their positions (as in archive revocationItems).
+export function embeddedRevocation(cms) {
+  try {
+    return signedDataOf(cms).crls.map((node, index) => {
+      if (node.tag === TAG.SEQUENCE) return { kind: 'crl', raw: whole(node), index };
+      const [format, value] = children(node);
+      return format?.tag === TAG.OID && oidOf(format) === LT_OIDS.ocspResponse && value ? { kind: 'ocsp', raw: whole(value), index } : { kind: 'other', index };
+    });
+  } catch (error) { if (error instanceof DerError) malformed(); throw error; }
+}
 // Validation data embedded in SignedData, counted without verifying anything.
 export function embeddedValidationData(cms) {
   try { return countEvidence(signedDataOf(cms)); } catch (error) { if (error instanceof DerError) malformed(); throw error; }
 }
 
-// What a long-term verification established, for the verify screen. The revocation status at the time
-// of a time-stamp is not derived from the embedded OCSP/CRL, so `historical.computed` is always false;
-// archive time-stamp renewal is not offered.
-export function longTermReport(verified, { signatureTimestamp, archiveRevocations = [] }) {
+// What a long-term verification established, for the verify screen. historical: the status at the
+// signature time-stamp derived from embedded evidence (historical.js), or why it was not computed.
+export function longTermReport(verified, { signatureTimestamp, archiveRevocations = [], historical = { computed: false }, renewal = false }) {
   const level = verified.archives.length ? 'LTA' : signatureTimestamp && verified.crls + verified.ocsp > 0 ? 'LT' : null;
   return {
     level,
     embedded: { certificates: verified.certificates, crls: verified.crls, ocsp: verified.ocsp },
     archives: verified.archives.map((archive, index) => ({ index: index + 1, time: archive.time, authority: archive.authority,
       hashAlgorithm: archive.hashAlgorithm, covers: { ...archive.covers }, revocation: archiveRevocations[index] })),
-    historical: { computed: false },
-    renewal: false
+    historical,
+    renewal
   };
 }
 

@@ -11,7 +11,6 @@ import { longTermHarness } from './helpers/long-term.js';
 import { signLongTerm } from '../extension/crypto/cades-lt.js';
 import { requestTimestamp, TSA_PROFILES } from '../extension/crypto/timestamp.js';
 import { RevocationChecker, memoryStore } from '../extension/crypto/revocation.js';
-import { HISTORICAL_NOT_COMPUTED } from '../extension/lib/verification-text.js';
 import { verifyCms } from '../extension/crypto/cms-verify.js';
 import { forge, oid, der } from '../extension/crypto/encoding.js';
 import { openContainer } from '../extension/crypto/signer.js';
@@ -601,6 +600,7 @@ try {
       const { cms } = await signLongTerm(lt.signer, Buffer.from('Tegin synthetic CAdES-LTA for browser verification'), { level: 'lta', signerPath: lt.signerPath,
         evidence: (path, role) => role === 'timestamp' ? ncaChecker.checkPath(path, { fresh: true }) : lt.evidence(path), requester: value => requestTimestamp(value, TSA_PROFILES.rsa) });
       writeFileSync(join(folder, 'archive.p7s'), cms);
+      writeFileSync(join(folder, 'archive-root.pem'), lt.pki.root.pem);
     } finally { lt.destroy(); }
     await tool.locator('#again').click();
     await tool.locator('#check-revocation').setChecked(false);
@@ -610,10 +610,35 @@ try {
     const archiveDetails = await tool.locator('#result-details').textContent();
     assert.match(archiveDetails, /Метка времени: .*\n.*\n\nCAdES-LTA: в подпись встроены сертификаты \(\d+\), ответы OCSP \(\d+\) и списки отзыва \(\d+\)\./);
     assert.match(archiveDetails, /Архивная метка 1 из 1: .+ · SHA-256\nПроверена: подпись службы меток и её цепочка НУЦ; .+\nСертификат службы меток сейчас: не проверялся/);
-    assert.ok(archiveDetails.includes(HISTORICAL_NOT_COMPUTED), 'historical revocation status is reported as not computed');
+    // The synthetic signer does not chain to the NCA root, so no status at the stamp is claimed.
+    assert.match(archiveDetails, /Статус отзыва на момент метки: не вычислялся\. Цепочку подписанта до корня НУЦ на дату метки построить не удалось/);
     assert.doesNotMatch(archiveDetails, /(на момент|в момент)[^.\n]*(не отозван|подтвержд|действителен)/i);
-    assert.match(archiveDetails, /Продлить архивную метку в Tegin пока нельзя\./);
-    console.log('PASS: CAdES-LTA with live NUC RSA time-stamps: the extension verifies the archive-time-stamp-v3 offline, lists it and reports the historical status as not computed');
+    assert.match(archiveDetails, /кнопкой «Продлить архивную метку»/);
+    console.log('PASS: CAdES-LTA with live NUC RSA time-stamps: the extension verifies the archive-time-stamp-v3 offline, lists it and does not claim a historical status for a chain outside the NCA');
+    // Renewal: validation data for the newest TSA path, then a second archive time-stamp from the live NUC TSA.
+    assert.equal(await tool.locator('#renew-archive').isVisible(), true);
+    assert.match(await tool.locator('#renew-status').textContent(), /хеш подписи .* серийные номера сертификатов службы меток/);
+    await tool.locator('#renew-archive').click();
+    await tool.locator('#renew-download:not([hidden])').waitFor({ timeout: 90000 });
+    assert.match(await tool.locator('#renew-status').textContent(), /Архивная метка добавлена: .+ Архивных меток в подписи: 2\. Прежние подписи, метки и данные проверки сохранены/);
+    const renewedWait = tool.waitForEvent('download'); await tool.locator('#renew-download').click();
+    const renewedPath = join(folder, 'archive.renewed.p7s'); await (await renewedWait).saveAs(renewedPath);
+    const original = readFileSync(join(folder, 'archive.p7s')), renewed = readFileSync(renewedPath);
+    assert.ok(renewed.length > original.length);
+    await tool.locator('#again').click();
+    await tool.locator('#document').setInputFiles(renewedPath);
+    await tool.locator('#verify-submit').click();
+    await tool.locator('#result-title').filter({ hasText: 'Подпись верна' }).waitFor();
+    const renewedDetails = await tool.locator('#result-details').textContent();
+    assert.match(renewedDetails, /Архивная метка 1 из 2: [^\n]+\n[^\n]+\n[^\n]+\nАрхивная метка 2 из 2: /);
+    if (process.env.DSS_VALIDATOR) {
+      const [dssRenewed] = JSON.parse(execFileSync('java', ['-cp', dssClasspath, 'Validate', renewedPath, join(folder, 'archive-root.pem')], { encoding: 'utf8' })).signatures;
+      const dssArchives = dssRenewed.timestamps.filter(item => item.type === 'ARCHIVE_TIMESTAMP');
+      assert.equal(dssArchives.length, 2, JSON.stringify(dssRenewed.timestamps));
+      assert.ok(dssArchives.every(item => item.archiveType === 'CAdES_V3' && item.imprintIntact && item.atsHashIndexValid), JSON.stringify(dssArchives));
+      assert.equal(dssRenewed.intact, true);
+    }
+    console.log(`PASS: archive time-stamp renewed from the verify screen with the live NUC TSA: two archive-time-stamp-v3, the first kept; re-verified by the extension${process.env.DSS_VALIDATOR ? ' and EU DSS (both imprints and ats-hash-index-v3 valid)' : ''}`);;
   }
   // Password change: refusals first, then a copy that opens with the new password only and keeps key and certificates.
   const passwordTool = await context.newPage();

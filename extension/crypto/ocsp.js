@@ -34,11 +34,13 @@ export function certificateParts(raw) {
 }
 
 // CertID with SHA-256 (accepted by ocsp.pki.gov.kz for RSA and GOST on 2026-11-09) and a 16-byte nonce.
-export async function buildOcspRequest(certificate, issuer, { nonce = crypto.getRandomValues(new Uint8Array(16)) } = {}) {
+// SHA-1 CertIDs are built only to match responses already embedded in a signature.
+export async function buildOcspRequest(certificate, issuer, { nonce = crypto.getRandomValues(new Uint8Array(16)), hash = 'SHA-256' } = {}) {
   const cert = certificateParts(certificate.raw), ca = certificateParts(issuer.raw);
   if (!equal(cert.issuer, ca.subject)) throw new RevocationError('OCSP_ISSUER', 'Издатель сертификата не совпадает с УЦ.');
-  const certId = { hashOid: SHA256, nameHash: await sha('SHA-256', ca.subject), keyHash: await sha('SHA-256', ca.keyBits), serial: cert.serial };
-  const certIdNode = seq(algorithm(SHA256), octet(certId.nameHash), octet(certId.keyHash), A.create(0, A.Type.INTEGER, false, binary(cert.serial)));
+  const hashOid = { 'SHA-256': SHA256, 'SHA-1': SHA1 }[hash];
+  const certId = { hashOid, nameHash: await sha(hash, ca.subject), keyHash: await sha(hash, ca.keyBits), serial: cert.serial };
+  const certIdNode = seq(algorithm(hashOid), octet(certId.nameHash), octet(certId.keyHash), A.create(0, A.Type.INTEGER, false, binary(cert.serial)));
   const nonceExtension = seq(oid(OCSP_NONCE), octet(der(octet(nonce))));
   const tbsRequest = seq(seq(seq(certIdNode)), context(2, [seq(nonceExtension)]));
   return { body: bytes(der(seq(tbsRequest))), certId, nonce: nonce.slice(), key: `${hex(certId.keyHash)}:${hex(cert.serial)}` };
@@ -90,7 +92,10 @@ function certificateExtensionIds(parts) {
 
 // Returns { status: 'good' | 'revoked' | 'unknown', ... } only for a fully verified response.
 // Any structural, signature, binding, nonce or freshness failure throws RevocationError.
-export async function verifyOcspResponse(raw, request, issuer, { now = Date.now(), skew = OCSP_LIMITS.skew, maxAge = OCSP_LIMITS.maxAge } = {}) {
+// historical: a response embedded in a signature, judged at its own producedAt. No nonce or freshness
+// against the present; the responder certificate must be valid at producedAt and its notAfter is
+// returned, so the caller can require proof that the response existed before then.
+export async function verifyOcspResponse(raw, request, issuer, { now = Date.now(), skew = OCSP_LIMITS.skew, maxAge = OCSP_LIMITS.maxAge, historical = false } = {}) {
   try {
     const response = root(raw);
     const [statusNode, bytesNode] = children(expect(response, TAG.SEQUENCE));
@@ -115,16 +120,18 @@ export async function verifyOcspResponse(raw, request, issuer, { now = Date.now(
 
     const certificates = certsNode ? children(expect(children(expect(certsNode, 0xa0))[0], TAG.SEQUENCE)).map(whole) : [];
     if (certificates.length > 4) throw new RevocationError('OCSP_MALFORMED', 'Слишком много сертификатов в ответе OCSP.');
-    const signer = await responderFor(responderId, certificates, issuer, now);
+    const signer = await responderFor(responderId, certificates, issuer, historical ? producedAt : now);
     if (!await signerVerified(signer, whole(tbs), bitStringBytes(signatureNode), oidOf(children(expect(signatureAlgorithm, TAG.SEQUENCE))[0])))
       throw new RevocationError('OCSP_SIGNATURE', 'Подпись ответа OCSP не прошла проверку.');
 
     for (const extension of responseExtensions) if (extension.critical && ![OCSP_NONCE, OCSP_EXTENDED_REVOKE].includes(extension.id)) throw new RevocationError('OCSP_CRITICAL', 'В ответе OCSP есть неизвестное критическое расширение.');
-    const nonce = responseExtensions.find(extension => extension.id === OCSP_NONCE);
-    if (!nonce) throw new RevocationError('OCSP_NONCE', 'Ответ OCSP без nonce не принимается.');
-    let echoed = nonce.value;
-    try { const inner = root(nonce.value); if (inner.tag === TAG.OCTET_STRING) echoed = content(inner); } catch {}
-    if (!equal(echoed, request.nonce)) throw new RevocationError('OCSP_NONCE', 'Ответ OCSP относится к другому запросу (nonce).');
+    if (!historical) {
+      const nonce = responseExtensions.find(extension => extension.id === OCSP_NONCE);
+      if (!nonce) throw new RevocationError('OCSP_NONCE', 'Ответ OCSP без nonce не принимается.');
+      let echoed = nonce.value;
+      try { const inner = root(nonce.value); if (inner.tag === TAG.OCTET_STRING) echoed = content(inner); } catch {}
+      if (!equal(echoed, request.nonce)) throw new RevocationError('OCSP_NONCE', 'Ответ OCSP относится к другому запросу (nonce).');
+    }
 
     const matching = responses.map(node => children(expect(node, TAG.SEQUENCE))).filter(parts => sameCertId(parseCertId(parts[0]), request.certId));
     if (matching.length !== 1) throw new RevocationError('OCSP_MISMATCH', 'Ответ OCSP не относится к проверяемому сертификату.');
@@ -139,12 +146,18 @@ export async function verifyOcspResponse(raw, request, issuer, { now = Date.now(
     for (const extension of singleExtensions) if (extension.critical && !KNOWN_SINGLE_EXTENSIONS.has(extension.id)) throw new RevocationError('OCSP_CRITICAL', 'В ответе OCSP есть неизвестное критическое расширение.');
 
     // Rules 500/НҚ p.19(6): the status describes only the moment it was provided.
-    if (thisUpdate > now + skew || producedAt > now + skew) throw new RevocationError('OCSP_FUTURE', 'Время ответа OCSP находится в будущем.');
-    if (thisUpdate < now - maxAge || producedAt < now - maxAge) throw new RevocationError('OCSP_STALE', 'Ответ OCSP устарел.');
-    if (nextUpdate !== null && (nextUpdate < thisUpdate || nextUpdate < now - skew)) throw new RevocationError('OCSP_STALE', 'Срок актуальности ответа OCSP истёк.');
+    if (historical) {
+      if (thisUpdate > producedAt + skew) throw new RevocationError('OCSP_FUTURE', 'Время статуса OCSP позже времени ответа.');
+      if (nextUpdate !== null && nextUpdate < thisUpdate) throw new RevocationError('OCSP_MALFORMED', 'Срок актуальности ответа OCSP раньше времени его выпуска.');
+    } else {
+      if (thisUpdate > now + skew || producedAt > now + skew) throw new RevocationError('OCSP_FUTURE', 'Время ответа OCSP находится в будущем.');
+      if (thisUpdate < now - maxAge || producedAt < now - maxAge) throw new RevocationError('OCSP_STALE', 'Ответ OCSP устарел.');
+      if (nextUpdate !== null && (nextUpdate < thisUpdate || nextUpdate < now - skew)) throw new RevocationError('OCSP_STALE', 'Срок актуальности ответа OCSP истёк.');
+    }
 
     const result = { source: 'ocsp', thisUpdate: new Date(thisUpdate).toISOString(), nextUpdate: nextUpdate === null ? null : new Date(nextUpdate).toISOString(),
-      producedAt: new Date(producedAt).toISOString(), expires: Math.min(nextUpdate ?? Infinity, thisUpdate + maxAge) };
+      producedAt: new Date(producedAt).toISOString(), expires: Math.min(nextUpdate ?? Infinity, thisUpdate + maxAge),
+      ...(historical ? { signerNotAfter: signer.summary.notAfter } : {}) };
     if (statusChoice.tag === 0x80) {
       if (statusChoice.end !== statusChoice.start) throw new DerError('good');
       return { ...result, status: 'good' };

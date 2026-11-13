@@ -35,13 +35,14 @@
 
 | Архив | Имя на сайте | Байт | SHA-256 |
 |---|---|---|---|
-| `tegin-chromium-0.6.0.zip` | `tegin-chromium-0.6.0-5b3eae2.zip` | 508 818 | `9a773c63d5788efa40ba1b6753263f1a398cdab119f62c7ccf83974ce263f653` |
-| `tegin-firefox-0.6.0.zip` | `tegin-firefox-0.6.0-5b3eae2.zip` | 508 895 | `96a15d8f6c781391b9080c2efb756d82bc047d03931d7d685c157dc22adff735` |
-| `tegin-source-0.6.0.zip` | (для AMO) | 746 075 | `c48bc22c506451fe89163f753f2c44a720a920e9f06c15c771feb0b5125a3a3c` |
+| `tegin-chromium-0.6.0.zip` | `tegin-chromium-0.6.0-530a4ae.zip` | 509 179 | `829738c6eb3813cea0c60b769ce63568f5ad6761d752ca14f03806bb71634de7` |
+| `tegin-firefox-0.6.0.zip` | `tegin-firefox-0.6.0-530a4ae.zip` | 509 256 | `6f62f1af2c6e6ff3ae1499984f211da5cea5b177ab80bb65f031705541d9587b` |
+| `tegin-source-0.6.0.zip` | (для AMO) | 768 873 | `fc6d01ededa87a9256d69cd1326a20a9f0c1157537c47532b910d342c0a95f31` |
 
-Собраны из `5b3eae2` (`release.json`: `clean: true`, Node 22.23.4); повторная сборка `npm run package` даёт те же
-байты. Коммиты после `5b3eae2`, меняющие только `website/`, `docs/` и тесты, архивы не меняют. Если до выкладки
-изменится код расширения, кандидат пересобирается и `releases.json`, `index.html` и эта таблица обновляются.
+Собраны из `530a4ae` (`release.json`: `clean: true`, Node 22.23.4); повторная сборка `npm run package` даёт те же
+байты. Первая сборка кандидата из `5b3eae2` заменена: после неё изменился код расширения (исправление `vendor/gost`,
+смена пароля при истёкшем сертификате, лимит отдельной подписи 16 МБ). Код расширения после `530a4ae` (историческая проверка отзыва, продление архивной метки) идёт в 0.7.0: версия в ветке
+повышена, архивы 0.6.0 этим не меняются. Коммиты после `530a4ae`, меняющие только `website/` и `docs/`, на кандидата не влияют.
 
 ## Назначение (single purpose)
 
@@ -172,7 +173,7 @@ Store; это ожидаемо.
    с пояснением «certificate serial number sent to the national certificate authority's OCSP service to check
    revocation; never to the developer»; Firefox — `data_collection_permissions.required: ['personallyIdentifyingInfo']`
    вместо `['none']`. Согласовать с юристом (записка `legal-review-notes.md`), манифест менять отдельным коммитом.
-4. **Версия и коммит.** Chrome Web Store и Edge: тот же архив `tegin-chromium-0.6.0.zip` из `5b3eae2`, что и на
+4. **Версия и коммит.** Chrome Web Store и Edge: тот же архив `tegin-chromium-0.6.0.zip` из `530a4ae`, что и на
    сайте. AMO: сборка с выбранным ID из коммита, где появится профиль `firefox-amo`, версия 0.6.0 или выше, с
    архивом исходников того же коммита.
 5. **Тип публикации AMO.** Рекомендация: сначала unlisted (подпись для распространения с сайта). Подписанный XPI

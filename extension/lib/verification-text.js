@@ -34,8 +34,40 @@ export function historyNote(history) {
 
 export const HISTORICAL_NOT_COMPUTED = 'Статус отзыва на момент меток: не вычислялся. Вложенные ответы OCSP и списки отзыва сохранены в подписи и сверены с архивными метками, но Tegin не вычисляет по ним состояние сертификатов в момент метки.';
 
-// CAdES-LT/LTA block of the verification result. Tegin has no historical revocation evaluation, so
-// whatever the report carries, the text says the status at the time of the stamps was not computed.
+const NOT_COMPUTED = {
+  algorithm: 'Статус отзыва на момент метки: не вычислялся. Это делается только для подписей RSA: для ГОСТ нет независимого валидатора с казахстанскими OID.',
+  untrusted: 'Статус отзыва на момент метки: не вычислялся. Цепочку подписанта до корня НУЦ на дату метки построить не удалось, поэтому вложенные данные отзыва не с чем сверить.'
+};
+const HISTORY_CODES = {
+  NO_EVIDENCE: 'в подписи нет ответа OCSP или списка отзыва для этого сертификата',
+  EVIDENCE_BEFORE_TIME: 'вложенные данные выпущены раньше метки и на её момент уже не действовали',
+  EVIDENCE_NOT_PROVEN: 'срок сертификата, которым подписаны данные отзыва, истёк, а архивной метки, подтверждающей, что данные существовали раньше, нет',
+  STATUS_UNKNOWN: 'служба отзыва не знает этот сертификат'
+};
+const FRESHNESS = { after: 'выпущены после метки', window: 'список действовал на момент метки' };
+const PROOF = { archive: 'существование подтверждено архивной меткой', present: 'существование подтверждено только сейчас' };
+const historyRole = entry => `${entry.role === 'timestamp' ? (entry.ca ? 'УЦ службы меток' : 'Служба меток') : entry.ca ? 'УЦ подписанта' : 'Подписант'} (${entry.name})`;
+
+// Status at the signature time-stamp derived from the embedded OCSP/CRL (crypto/historical.js). Only a
+// report with computed === true may state a status at that moment.
+export function historicalText(historical) {
+  if (historical?.computed !== true) return NOT_COMPUTED[historical?.reason] || HISTORICAL_NOT_COMPUTED;
+  const at = dateTime(historical.time);
+  const entries = historical.certificates || [];
+  if (historical.state === 'revoked') {
+    const entry = entries.find(item => item.state === 'revoked');
+    return `Статус отзыва на момент метки ${at}: ${historyRole(entry)} уже был отозван ${dateTime(entry.revocationTime)}${entry.reason ? ' (' + (REASONS[entry.reason] || entry.reason) + ')' : ''}. Вычислено по вложенным данным отзыва.`;
+  }
+  const lines = entries.map(entry => entry.state === 'good'
+    ? `${historyRole(entry)}: не отозван · ${REVOCATION_SOURCES[entry.source]} от ${dateTime(entry.thisUpdate)}, ${FRESHNESS[entry.freshness]} · ${PROOF[entry.provenBy]}${entry.revokedLater ? ` · отозван позже, ${dateTime(entry.revokedLater)}` : ''}`
+    : `${historyRole(entry)}: не определён · ${HISTORY_CODES[entry.code] || `вложенные данные не прошли проверку (${entry.code})`}`);
+  const head = historical.state === 'good'
+    ? `Статус отзыва на момент метки ${at}: не отозван. Вычислено без сети по вложенным ответам OCSP и спискам отзыва для цепочек подписанта и службы меток.`
+    : `Статус отзыва на момент метки ${at}: не определён. Вложенных доказательств недостаточно.`;
+  return [head, ...lines].join('\n');
+}
+
+// CAdES-LT/LTA block of the verification result.
 export function longTermText(longTerm) {
   if (!longTerm?.level) return '';
   const { embedded, archives } = longTerm;
@@ -46,8 +78,9 @@ export function longTermText(longTerm) {
       `Проверена: подпись службы меток и её цепочка НУЦ; сверены документ, подпись и учтённые меткой сертификаты (${archive.covers.certificates}), данные отзыва (${archive.covers.revocation}) и атрибуты (${archive.covers.attributes}).`,
       `Сертификат службы меток сейчас: ${label(archive.revocation).toLowerCase()}`);
   }
-  lines.push(HISTORICAL_NOT_COMPUTED);
-  if (archives.length) lines.push('Продлить архивную метку в Tegin пока нельзя.');
+  lines.push(historicalText(longTerm.historical));
+  if (longTerm.renewal) lines.push('Архивную метку можно продлить кнопкой «Продлить архивную метку»: прежние подписи, данные проверки и метки сохранятся.');
+  else if (archives.length) lines.push('Продлить архивную метку в Tegin можно только для подписей RSA с меткой времени.');
   return lines.join('\n');
 }
 
@@ -64,7 +97,7 @@ export function verificationText(data, { revocationRequested }) {
   const footer = states.some(state => state !== 'good' && state !== 'not-checked') ? 'Текущий статус отзыва сам по себе не определяет действительность подписи в прошлом.'
     : states.includes('not-checked') && !revocationRequested ? 'Чтобы узнать статус отзыва, отметьте «Проверить отзыв онлайн» и проверьте снова.' : '';
   return {
-    revoked, trusted, warning: !trusted || states.some(state => state !== 'good' && state !== 'not-checked'),
+    revoked, trusted, warning: !trusted || states.some(state => state !== 'good' && state !== 'not-checked') || (data.longTerm?.historical?.computed === true && data.longTerm.historical.state !== 'good'),
     title: revoked ? 'Подпись соответствует документу' : 'Подпись верна',
     description: revoked ? 'Содержимое соответствует подписи, но сертификат отозван. Сведения о времени отзыва ниже.' : 'Содержимое соответствует криптографической подписи.',
     details: [signers, stamps, longTerm, footer].filter(Boolean).join('\n\n')

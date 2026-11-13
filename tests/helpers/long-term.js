@@ -5,6 +5,10 @@ import { RevocationChecker, memoryStore } from '../../extension/crypto/revocatio
 import { OCSP_URL } from '../../extension/crypto/revocation-profiles.js';
 import { makeTimestampRequest, verifyTimestampResponse, TSA_PROFILES } from '../../extension/crypto/timestamp.js';
 import { syntheticPki, ocspResponse, parseOcspRequest, crl, fingerprintOf } from './pki.js';
+import { verifyLongTerm, embeddedRevocation, LT_OIDS } from '../../extension/crypto/cades-lt.js';
+import { verifyEmbeddedTimestamp } from '../../extension/crypto/timestamp.js';
+import { historicalRevocation } from '../../extension/crypto/historical.js';
+import { parse } from '../../extension/crypto/encoding.js';
 import { syntheticTsa } from './tsa.js';
 import { PASSWORD } from './fixtures.js';
 
@@ -57,4 +61,21 @@ export async function longTermHarness({ ocspStatus = 'good' } = {}) {
     pki, tsa, signer, signerPath, anchors, requester, evidence, calls, stampCount: () => stamps,
     destroy() { signer.destroy(); tsa.destroy(); }
   };
+}
+
+// The signature time-stamp of a CAdES-T/LT/LTA with its verified TSA path.
+export async function signatureStamp(cms, anchors) {
+  const asn1 = forge.asn1.fromDer(forge.util.binary.raw.encode(cms));
+  const signerInfo = asn1.value[1].value[0].value.at(-1).value[0];
+  const stamp = signerInfo.value.at(-1).value.find(item => forge.asn1.derToOid(item.value[0].value) === LT_OIDS.signatureTimestamp);
+  const signature = signerInfo.value.find(item => item.type === forge.asn1.Type.OCTETSTRING && item.tagClass === 0);
+  return verifyEmbeddedTimestamp(parse(forge.asn1.toDer(stamp.value[1].value[0]).getBytes()), forge.util.binary.raw.decode(signature.value), { anchors });
+}
+// What the extension worker computes for the verify screen (crypto/historical.js), for the harness signer.
+export async function evaluateHistorical(h, cms, { detached } = {}) {
+  const stamp = await signatureStamp(cms, h.anchors);
+  const verified = await verifyLongTerm(cms, { detached, anchors: h.anchors });
+  const signerPath = (await verifyChain(h.signer.info, h.signer.certificates, { anchors: h.anchors, now: Date.parse(stamp.time) })).certificates;
+  return historicalRevocation({ paths: [{ role: 'signer', certificates: signerPath, time: stamp.time }, { role: 'timestamp', certificates: stamp.certificates, time: stamp.time }],
+    evidence: embeddedRevocation(cms), archives: verified.archives });
 }

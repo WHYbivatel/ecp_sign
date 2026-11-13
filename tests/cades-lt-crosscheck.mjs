@@ -6,7 +6,10 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { longTermHarness, editSignedData } from './helpers/long-term.js';
+import { longTermHarness, editSignedData, evaluateHistorical, signatureStamp } from './helpers/long-term.js';
+import { ocspResponse, parseOcspRequest, crl } from './helpers/pki.js';
+import { buildOcspRequest } from '../extension/crypto/ocsp.js';
+import { signCms } from '../extension/crypto/cms.js';
 import { signLongTerm, verifyLongTerm, addArchiveTimestamp, addValidationData } from '../extension/crypto/cades-lt.js';
 import { verifyCms } from '../extension/crypto/cms-verify.js';
 
@@ -104,6 +107,43 @@ try {
   assert.equal(changedResult.intact, false);
   passed++;
   await expectRejected('content changed', verifyCms(changed, { anchors: h.anchors }), /./);
+
+  // Historical revocation status (crypto/historical.js) against DSS past-signature validation.
+  assert.equal((await evaluateHistorical(h, lt)).state, 'good');
+  assert.equal((await evaluateHistorical(h, renewed)).state, 'good');
+  passed++;
+  // CAdES-T with hand-made evidence: the signer's OCSP answer says revoked, before or after the stamp.
+  const stamped = await signCms(h.signer, data, { cades: true, timestamp: true, timestampRequester: h.requester, signingTime: new Date() });
+  const stamp = await signatureStamp(stamped, h.anchors);
+  const [leaf, ca] = h.signerPath, tsaPath = stamp.certificates;
+  const answer = async (certificate, issuer, options) => ocspResponse(parseOcspRequest((await buildOcspRequest(certificate, issuer)).body), { signer: h.pki.responder, nonce: null, ...options });
+  const withEvidence = async leafOptions => addValidationData(stamped, {
+    certificates: [...h.signerPath, ...tsaPath].map(item => item.raw).map(raw => Uint8Array.from(raw, char => char.charCodeAt(0))),
+    crls: [crl(h.pki.root, { number: 3 })],
+    ocsp: [await answer(leaf, ca, leafOptions), await answer(tsaPath[0], tsaPath[1], { thisUpdate: Date.now() })]
+  });
+  const stampTime = Date.parse(stamp.time);
+  const comparisons = [];
+  for (const [name, options, expected] of [
+    ['revoked-after.p7s', { status: 'revoked', revocationTime: stampTime + 2000, reason: 1, thisUpdate: stampTime + 3000 }, 'good'],
+    ['revoked-before.p7s', { status: 'revoked', revocationTime: stampTime - 3600000, reason: 1, thisUpdate: stampTime + 3000 }, 'revoked']
+  ]) {
+    const cms = await withEvidence(options);
+    const tegin = await evaluateHistorical(h, cms);
+    assert.equal(tegin.state, expected, `${name}: ${JSON.stringify(tegin.certificates)}`);
+    const result = runDss(name, cms);
+    comparisons.push(`${name}: Tegin ${tegin.state}, DSS ${result.indication}${result.subIndication ? '/' + result.subIndication : ''}`);
+    if (expected === 'revoked') assert.notEqual(result.indication, 'TOTAL_PASSED', `${name}: ${JSON.stringify(result)}`);
+    else assert.equal(result.indication, 'TOTAL_PASSED', `${name}: ${JSON.stringify(result)}`);
+    passed++;
+  }
+  const bare = await evaluateHistorical(h, stamped);
+  assert.equal(bare.state, 'indeterminate');
+  const bareResult = runDss('t-only.p7s', stamped);
+  comparisons.push(`t-only.p7s: Tegin ${bare.state}, DSS ${bareResult.indication}${bareResult.subIndication ? '/' + bareResult.subIndication : ''}`);
+  assert.notEqual(bareResult.indication, 'TOTAL_PASSED', JSON.stringify(bareResult));
+  passed++;
+  console.log('historical status, Tegin vs DSS:\n  ' + comparisons.join('\n  '));
 
   console.log(`CAdES-LT/LTA crosscheck: ${passed} checks passed (EU DSS 6.5.1)`);
 } finally {

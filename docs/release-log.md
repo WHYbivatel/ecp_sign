@@ -4,11 +4,21 @@
 что не подтверждено. Публикация в магазинах и слияние в `main` — отдельные действия, здесь они
 отмечаются только после фактического выполнения.
 
+## 0.7.0: в разработке, не собиралась
+
+Код расширения после кандидата 0.6.0. Версия в `manifest.json` и `package.json` повышена до 0.7.0, чтобы
+архивы из ветки не путались с кандидатом.
+
+| Коммит | Изменение | Проверка |
+|---|---|---|
+| NEXT | Статус отзыва на момент метки подписи по вложенным OCSP/CRL (`crypto/historical.js`), «не определён» с причиной при нехватке доказательств; продление архивной метки на экране проверки. Видно пользователю: в результате проверки CAdES-LT/LTA RSA строки «Статус отзыва на момент метки …» для каждого сертификата и кнопка «Продлить архивную метку». Также комплект испытания токена `tests/token-device.mjs` | unit 198/198 (`historical.test.js` 11/11); EU DSS `cades-lt-crosscheck.mjs` 15/15 с тремя историческими сценариями; `tests/e2e.mjs` 47/47 офлайн и 53/53 с живыми службами НУЦ (продление, повторная проверка, DSS); `token-device.mjs` на SoftHSM2 в одноразовом контейнере |
+
 ## Кандидат 0.6.0: не опубликован
 
-Архивы собраны из `5b3eae2` (`dist/release.json`, `clean: true`): Chromium `tegin-chromium-0.6.0-5b3eae2.zip`
-508 818 байт, SHA-256 `9a773c63…f653`; Firefox `tegin-firefox-0.6.0-5b3eae2.zip` 508 895 байт, `96a15d8f…f735`;
-исходники для AMO 746 075 байт, `c48bc22c…3a3c`. Полная таблица — `store-submission.md`. `website/` описывает этого
+Архивы собраны из `530a4ae` (`dist/release.json`, `clean: true`, повторная сборка побайтно совпадает): Chromium
+`tegin-chromium-0.6.0-530a4ae.zip` 509 179 байт, SHA-256 `829738c6…4de7`; Firefox `tegin-firefox-0.6.0-530a4ae.zip`
+509 256 байт, `6f62f1af…587b`; исходники для AMO 768 873 байт, `fc6d01ed…5f31`. Первая сборка из `5b3eae2` заменена,
+потому что после неё изменился код расширения. Полная таблица — `store-submission.md`. `website/` описывает этого
 кандидата (ссылки, `releases.json` с откатом на `dd40b5e` и Firefox 0.5.2, `legal.html`, `privacy.html`); на сайт не
 выложено. `publishedAt` ставится в день выкладки.
 
@@ -17,7 +27,8 @@
 | `d3c2f49`, `0b59a7c`, `971f889` | Правовая страница из `codex/legal-info` (перенесена в ветку) | — |
 | `5b3eae2` | Версия 0.6.0; `release.json` связывает архивы с коммитом, CI требует чистое дерево; подключённые сайты вне `.kz` переживают перезагрузку расширения в Chromium и переустановку в Firefox (раньше адаптер пропадал при сохранённом разрешении). Видно пользователю: сайт не надо подключать заново; инструкция обновления в INSTALL.md | unit 181/181; `e2e-update.mjs` 5/5 и `e2e-update-firefox.mjs` локально; CI 43396309173: обновление прошло на Linux и macOS, на Windows упало из-за CRLF в сборке `dd40b5e` (исправлено следующим коммитом); Chrome на Windows — истёк срок подтверждения подписи в `e2e-issuance.mjs`, ранее не воспроизводилось |
 | `a15ce60` | Сайт под 0.6.0: ссылки и `releases.json` (Chromium и Firefox, имена с коммитом, откат), `check-releases.mjs` проверяет обе записи и `--release`; `legal.html` по 0.6.0 (отзыв, PBES2, PAdES, LT/LTA, выпуск ключа, смена пароля), `privacy.html` из `privacy-policy.md`; Firefox E2E: откат на 0.5.2 и возврат с ключом заявки; закреплены опубликованные сборки для теста обновления | `check-releases.mjs --release --chromium-zip --firefox-zip`; Firefox 5/5, Chromium 5/5 локально; CI 43397481991: Chrome и Edge на Windows, Chrome на macOS и Linux, Chromium — обновление прошло; Firefox на Linux и Windows упал на гонке теста (новая страница создавалась, пока закрывалось окно подтверждения), исправлено следующим коммитом |
-| следующий | Полный E2E (`tests/e2e.mjs`: CMS, CAdES-T, XML, PAdES с EU DSS и pyHanko, CAdES-LT/LTA, смена пароля, модули) запускается в Chrome и Edge через общий `launchExtension`; задача CI `full-e2e-browsers`: Chrome и Edge на Windows x64, Chrome на macOS ARM64, с DSS и pyHanko | локально Linux x64: Chromium 156, Chrome 157, Edge 157 — 46/46 каждый, DSS и pyHanko; Firefox E2E обновления 3 прогона подряд 5/5 |
+| `503d14a` | Полный E2E (`tests/e2e.mjs`: CMS, CAdES-T, XML, PAdES с EU DSS и pyHanko, CAdES-LT/LTA, смена пароля, модули) запускается в Chrome и Edge через общий `launchExtension`; задача CI `full-e2e-browsers`: Chrome и Edge на Windows x64, Chrome на macOS ARM64, с DSS и pyHanko | локально Linux x64: Chromium 156, Chrome 157, Edge 157 — 46/46 каждый; CI 43401902567: полный E2E прошёл в Chrome на macOS и Chromium на Linux, обновление и выпуск ключа — во всех 8 сочетаниях; упали Chrome и Edge на Windows (буфер обмена Windows переводит строки в CRLF, тест сравнивал без нормализации) и XML против кода NCALayer (`ReferenceError: subtract` в `vendor/gost`, см. следующую строку) |
+| `530a4ae` | Исправлен `invMod` в `vendor/gost` (вызов несуществующей `subtract`): примерно одна из 3000 подписей и проверок ГОСТ-256 падала с ошибкой; регрессионный тест `tests/vendor-gost.test.js`. Смена пароля контейнера с истёкшим сертификатом разрешена (ключ и сертификаты сохраняются, MAC и соответствие ключа проверяются), подпись таким ключом по-прежнему отклоняется. Отдельная подпись CMS/CAdES-BES и исходный файл при её проверке в окне подписи — до 16 МБ (`docs/file-limits.md`). Видно пользователю: файл больше 2 МБ можно подписать отдельной подписью, подсказка предлагает этот формат; пароль ключа с истёкшим сертификатом можно сменить | unit 185/185; `tests/e2e.mjs` 47/47 (Chromium, DSS, pyHanko); `tests/e2e-limits.mjs` (граница 2 МБ и 16 МБ, отмена, повтор, OpenSSL); `tests/kalkan-password.mjs` 13/13 с истёкшим RSA; `check-releases.mjs --release` на пересобранных архивах; `e2e-update.mjs` 5/5 и `e2e-update-firefox.mjs` 5/5 на пересобранном кандидате; CI [43406139369](https://github.com/WHYbivatel/ecp_sign/actions/runs/43406139369): все 19 задач зелёные, в том числе полный E2E в Chrome и Edge на Windows x64 и Chrome на macOS, XML против кода NCALayer, обновление и откат Firefox на Linux, Windows и macOS |
 
 ## После `dd40b5e`: не опубликовано
 

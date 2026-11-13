@@ -8,8 +8,9 @@ import { verifyChain } from './chain.js';
 import { forge, bytes as binaryBytes } from './encoding.js';
 import { verifyCms, describeCms } from './cms-verify.js';
 import { verifyEmbeddedTimestamp, requestTimestamp, TSA_PROFILES } from './timestamp.js';
-import { signLongTerm, verifyLongTerm, checkLongTermKey, embeddedValidationData, longTermReport, LT_OIDS } from './cades-lt.js';
-import { A, oidValue } from './encoding.js';
+import { signLongTerm, verifyLongTerm, checkLongTermKey, embeddedValidationData, embeddedRevocation, longTermReport, addValidationData, addArchiveTimestamp, LT_OIDS } from './cades-lt.js';
+import { historicalRevocation } from './historical.js';
+import { A, O, oidValue } from './encoding.js';
 import { RevocationChecker, blocks, summarize, assessHistory, isCurrent, STATES } from './revocation.js';
 import { generateRequest, inspectCertificates, installCertificates, IssuanceError } from './issuance.js';
 import { trustStore } from './trust-store.js';
@@ -38,6 +39,16 @@ const notChecked = reason => summarize([], new Date().toISOString(), reason);
 // CMS accepted by verifyCms but not strict DER carries no CAdES-LT data Tegin can report on.
 function hasRevocationData(cms) {
   try { const embedded = embeddedValidationData(cms); return embedded.crls + embedded.ocsp > 0; } catch { return false; }
+}
+// Status at the signature time-stamp from the embedded evidence, offline. RSA only, like creating
+// CAdES-LT/LTA: for GOST there is no independent validator with the Kazakh OIDs.
+async function historicalStatus(raw, signer, certificates, stamp, stampPath, archives) {
+  if (!stamp) return { computed: false, reason: 'no-timestamp' };
+  if (signer.certificate.keyOid !== O.rsa) return { computed: false, reason: 'algorithm' };
+  const atStamp = await verifyChain(signer.certificate, certificates, { now: Date.parse(stamp.time) });
+  if (!atStamp.trusted) return { computed: false, reason: 'untrusted' };
+  return historicalRevocation({ paths: [{ role: 'signer', certificates: atStamp.certificates, time: stamp.time }, { role: 'timestamp', certificates: stampPath, time: stamp.time }],
+    evidence: embeddedRevocation(raw), archives });
 }
 const REVOCATION_MESSAGES = {
   revoked: subject => `${subject} отозван. Операция заблокирована.`,
@@ -132,9 +143,10 @@ self.onmessage = async ({ data }) => {
           const unsigned = signer.info.value.find(node => node.tagClass === A.Class.CONTEXT_SPECIFIC && node.type === 1);
           const stamps = (unsigned?.value || []).filter(attribute => oidValue(attribute.value[0]) === '1.2.840.113549.1.9.16.2.14');
           if (stamps.length > 1 || stamps[0]?.value[1].value.length > 1) throw new Error('Неоднозначные метки времени в подписи.');
-          let stamp = null;
+          let stamp = null, stampPath = null;
           if (stamps.length) {
             const verifiedStamp = await verifyEmbeddedTimestamp(stamps[0].value[1].value[0], signer.signature);
+            stampPath = verifiedStamp.certificates;
             // Network only on the user's explicit request; local verification stays offline by default.
             stamp = { time: verifiedStamp.time, authority: verifiedStamp.authority,
               revocation: data.checkRevocation ? await revocation().checkPath(verifiedStamp.certificates) : notChecked('not-requested') };
@@ -149,13 +161,40 @@ self.onmessage = async ({ data }) => {
               archiveRevocations.push(status);
               timestamps.push({ kind: 'archive', time: archive.time, authority: archive.authority, revocation: status });
             }
-            longTerm = longTermReport(checked, { signatureTimestamp: stamp, archiveRevocations });
+            const historical = await historicalStatus(raw, signer, verified.certificates, stamp, stampPath, checked.archives);
+            longTerm = longTermReport(checked, { signatureTimestamp: stamp, archiveRevocations, historical,
+              renewal: Boolean(stamp) && verified.signers.length === 1 && signer.certificate.keyOid === O.rsa });
           }
           const current = !data.checkRevocation ? notChecked('not-requested') : signer.trust.trusted ? await revocation().checkPath(signer.trust.certificates) : notChecked('untrusted');
           signers.push({ ...signer.certificate.summary, trust: { ...signer.trust, revocation: current }, history: assessHistory(current, stamp) });
         }
         const content = verified.content.slice();
         self.postMessage({ kind: 'verified', attached: verified.attached, signers, timestamps, longTerm, content: content.buffer }, [content.buffer]);
+      } finally { raw.fill(0); original?.fill(0); }
+      self.close();
+    } else if (data.kind === 'renew-archive') {
+      // EN 319 122-1 5.5.3 renewal: validation data for the newest time-stamp's TSA path, then a new
+      // archive-time-stamp-v3 over everything, earlier stamps and evidence included. Network only here,
+      // on the user's click: OCSP/CRL of the NCA and the NCA RSA time-stamp service.
+      const raw = new Uint8Array(data.signature);
+      const original = data.original ? new Uint8Array(data.original) : undefined;
+      try {
+        const verified = await verifyCms(raw, { detached: original });
+        const [signer] = verified.signers;
+        if (verified.signers.length !== 1 || signer.certificate.keyOid !== O.rsa) throw new Error('Продлить архивную метку можно только для подписи RSA с одним подписантом.');
+        const before = await verifyLongTerm(raw, { detached: original });
+        const unsigned = signer.info.value.find(node => node.tagClass === A.Class.CONTEXT_SPECIFIC && node.type === 1);
+        const stamp = (unsigned?.value || []).find(attribute => oidValue(attribute.value[0]) === LT_OIDS.signatureTimestamp);
+        if (!stamp) throw new Error('Архивная метка добавляется только к подписи с меткой времени.');
+        const newest = before.archives.at(-1) || await verifyEmbeddedTimestamp(stamp.value[1].value[0], signer.signature);
+        const status = await longTermEvidence(newest.certificates, 'timestamp');
+        const extended = addValidationData(raw, { certificates: newest.certificates.map(item => binaryBytes(item.raw)), ...status.evidence });
+        const { cms, stamp: archive } = await addArchiveTimestamp(extended, { detached: original, requester: input => requestTimestamp(input, TSA_PROFILES.rsa) });
+        await checkStamp(archive);
+        await verifyCms(cms, { detached: original });
+        const after = await verifyLongTerm(cms, { detached: original });
+        if (after.archives.length !== before.archives.length + 1) throw new Error('Не удалось проверить продлённую подпись.');
+        self.postMessage({ kind: 'renewed', signature: cms.buffer, archives: after.archives.length, archive: { time: archive.time, authority: archive.authority, revocation: archive.revocation } }, [cms.buffer]);
       } finally { raw.fill(0); original?.fill(0); }
       self.close();
     } else if (data.kind === 'issue-generate') {

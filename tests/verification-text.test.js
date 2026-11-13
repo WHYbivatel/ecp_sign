@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { longTermHarness } from './helpers/long-term.js';
 import { signLongTerm, verifyLongTerm, embeddedValidationData, longTermReport } from '../extension/crypto/cades-lt.js';
 import { signCms } from '../extension/crypto/cms.js';
-import { longTermText, verificationText, HISTORICAL_NOT_COMPUTED } from '../extension/lib/verification-text.js';
+import { longTermText, verificationText, historicalText, HISTORICAL_NOT_COMPUTED } from '../extension/lib/verification-text.js';
+import { historicalRevocation } from '../extension/crypto/historical.js';
+import { embeddedRevocation } from '../extension/crypto/cades-lt.js';
 
 const h = await longTermHarness();
 test.after(() => h.destroy());
@@ -41,8 +43,9 @@ test('CAdES-LTA report lists each verified archive time-stamp with its coverage 
   assert.match(text, /сертификаты \(4\), данные отзыва \(3\) и атрибуты \(1\)/);
   assert.match(text, /Сертификат службы меток сейчас: не отозван по актуальным данным/);
   assert.ok(text.includes(HISTORICAL_NOT_COMPUTED));
-  assert.match(text, /Продлить архивную метку в Tegin пока нельзя\./);
+  assert.match(text, /Продлить архивную метку в Tegin можно только для подписей RSA с меткой времени\./);
   assert.doesNotMatch(text, CONFIRMED);
+  assert.match(longTermText({ ...report, renewal: true }), /кнопкой «Продлить архивную метку»: прежние подписи, данные проверки и метки сохранятся/);
 });
 
 test('CAdES-LT report has no archive time-stamps and still says the historical status was not computed', async () => {
@@ -102,4 +105,44 @@ test('revocation relative to a time-stamp keeps its existing wording', () => {
   assert.match(text.details, /позже метки времени .+: метка подтверждает, что подпись существовала до отзыва\./);
   assert.match(text.details, /Текущий статус отзыва сам по себе не определяет действительность подписи в прошлом\./);
   assert.doesNotMatch(text.details, /CAdES-/);
+});
+
+const historicalFor = async cms => {
+  const { stamp } = cms;
+  return historicalRevocation({ paths: [{ role: 'signer', certificates: h.signerPath, time: stamp.time }, { role: 'timestamp', certificates: stamp.certificates, time: stamp.time }],
+    evidence: embeddedRevocation(cms.cms) });
+};
+
+test('a computed historical status is stated per certificate with source, freshness and proof of existence', async () => {
+  const created = await sign('lt');
+  const historical = await historicalFor(created);
+  assert.equal(historical.state, 'good');
+  const text = historicalText(historical);
+  assert.match(text, /^Статус отзыва на момент метки .+: не отозван\. Вычислено без сети по вложенным ответам OCSP и спискам отзыва/);
+  assert.match(text, /Подписант \(Tegin synthetic leaf\): не отозван · OCSP НУЦ от .+, выпущены после метки · существование подтверждено только сейчас/);
+  assert.match(text, /УЦ подписанта \(Tegin synthetic CA\): не отозван · список отзыва \(CRL\) от .+, список действовал на момент метки/);
+  assert.match(text, /Служба меток \(Tegin synthetic TSA\): не отозван/);
+  const report = longTermReport(await verifyLongTerm(created.cms, { anchors: h.anchors }), { signatureTimestamp: created.stamp, historical });
+  const { details, warning } = verificationText(verifyResult(report), { revocationRequested: true });
+  assert.ok(details.includes(text)); assert.ok(!details.includes(HISTORICAL_NOT_COMPUTED)); assert.equal(warning, false);
+});
+
+test('indeterminate and revoked historical statuses are explained and raise a warning', async () => {
+  const created = await sign('lt');
+  const base = longTermReport(await verifyLongTerm(created.cms, { anchors: h.anchors }), { signatureTimestamp: created.stamp });
+  const time = new Date().toISOString();
+  const indeterminate = { computed: true, state: 'indeterminate', time, certificates: [
+    { role: 'signer', name: 'Leaf', ca: false, state: 'indeterminate', code: 'EVIDENCE_BEFORE_TIME' },
+    { role: 'signer', name: 'CA', ca: true, state: 'indeterminate', code: 'OCSP_SIGNATURE' }] };
+  const text = historicalText(indeterminate);
+  assert.match(text, /не определён\. Вложенных доказательств недостаточно\./);
+  assert.match(text, /Подписант \(Leaf\): не определён · вложенные данные выпущены раньше метки/);
+  assert.match(text, /УЦ подписанта \(CA\): не определён · вложенные данные не прошли проверку \(OCSP_SIGNATURE\)/);
+  assert.doesNotMatch(text, /: не отозван/);
+  assert.equal(verificationText(verifyResult({ ...base, historical: indeterminate }), { revocationRequested: false }).warning, true);
+  const revoked = { computed: true, state: 'revoked', time, certificates: [{ role: 'signer', name: 'Leaf', ca: false, state: 'revoked', revocationTime: time, reason: 'keyCompromise' }] };
+  assert.match(historicalText(revoked), /Подписант \(Leaf\) уже был отозван .+ \(компрометация ключа\)/);
+  assert.equal(verificationText(verifyResult({ ...base, historical: revoked }), { revocationRequested: false }).warning, true);
+  assert.match(historicalText({ computed: false, reason: 'algorithm' }), /только для подписей RSA/);
+  assert.match(historicalText({ computed: false, reason: 'untrusted' }), /Цепочку подписанта до корня НУЦ на дату метки построить не удалось/);
 });

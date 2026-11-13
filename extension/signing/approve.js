@@ -13,7 +13,7 @@ const DOC_LIMIT = 2 * 1024 * 1024, DETACHED_LIMIT = 16 * 1024 * 1024, SIGNATURE_
 const DETACHED_FORMATS = ['cms-detached', 'cades-detached'];
 let request, worker, selectedCertificate, signatureFile, localName = '', generation = 0, previewGeneration = 0;
 let finished = false, busy = false, downloadUrl, deadline = Date.now() + 180000;
-let signatureInfo, createdSignature, createdName = '', viewAnimation, pdfInspector, documentRevision = 0;
+let signatureInfo, createdSignature, createdName = '', viewAnimation, pdfInspector, documentRevision = 0, renewWorker, renewUrl;
 const status = $('#status');
 const sizeLabel = count => count < 1024 ? `${count} Б` : `${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(count / 1024)} КБ`;
 const hex = value => [...value].map(byte => byte.toString(16).padStart(2, '0')).join('');
@@ -304,6 +304,7 @@ function resultScreen({ title, description, details, download, filename, downloa
   }
   animateView($('#result-screen'));
   $('#verify-created').hidden = true;
+  stopRenewal(); $('#renew-archive').hidden = true; $('#renew-download').hidden = true; $('#renew-status').hidden = true;
   $('#again').hidden = Boolean(id);
   $('#again').textContent = verifyMode ? 'Проверить другую подпись' : 'Подписать ещё один файл';
 }
@@ -380,6 +381,10 @@ async function verifySelected() {
       resultScreen({ title, description, details,
         warning, download: new Blob([content], { type: 'application/octet-stream' }), filename: (localName.replace(/\.(p7s|p7m|cms)$/i, '') || 'signed-document') + ( /\.[a-z0-9]{1,8}$/i.test(localName.replace(/\.(p7s|p7m|cms)$/i, '')) ? '' : '.bin') });
       content.fill(0);
+      if (data.longTerm?.renewal) {
+        $('#renew-archive').hidden = false; $('#renew-archive').disabled = false;
+        renewStatus('Для продления в НУЦ уйдут хеш подписи (для новой метки времени) и серийные номера сертификатов службы меток (для проверки отзыва). Документ не передаётся.');
+      }
     });
     const signature = signatureFile.slice().buffer;
     worker.postMessage({ kind: 'verify', signature, original, checkRevocation: $('#check-revocation').checked }, original ? [signature, original] : [signature]); original = null;
@@ -387,6 +392,38 @@ async function verifySelected() {
   finally { if (original?.byteLength) new Uint8Array(original).fill(0); }
 }
 $('#verify-submit').addEventListener('click', () => verifySelected());
+function renewStatus(text, error = false) { $('#renew-status').textContent = text; $('#renew-status').hidden = !text; $('#renew-status').toggleAttribute('data-error', error); }
+function stopRenewal() {
+  renewWorker?.terminate(); renewWorker = null;
+  if (renewUrl) { URL.revokeObjectURL(renewUrl); renewUrl = null; }
+}
+// A new archive time-stamp over the verified CAdES-LT/LTA; earlier stamps, evidence and signatures stay.
+$('#renew-archive').addEventListener('click', async () => {
+  if (renewWorker || !signatureFile) return;
+  let original;
+  try {
+    const file = signatureInfo?.attached ? undefined : $('#original').files[0];
+    original = file ? await file.arrayBuffer() : undefined;
+    const signature = signatureFile.slice().buffer;
+    $('#renew-archive').disabled = true; renewStatus('Получаем данные отзыва и новую метку НУЦ…');
+    renewWorker = new Worker(api.runtime.getURL('crypto/worker.js'));
+    const current = renewWorker;
+    renewWorker.onerror = () => { if (renewWorker !== current) return; renewWorker = null; $('#renew-archive').disabled = false; renewStatus('Не удалось продлить архивную метку.', true); };
+    renewWorker.onmessage = ({ data }) => {
+      if (renewWorker !== current) return;
+      renewWorker = null;
+      if (data.kind === 'error') { $('#renew-archive').disabled = false; renewStatus(data.message, true); return; }
+      if (data.kind !== 'renewed') return;
+      const value = new Uint8Array(data.signature);
+      renewUrl = URL.createObjectURL(new Blob([value], { type: 'application/pkcs7-signature' })); value.fill(0);
+      $('#renew-download').href = renewUrl; $('#renew-download').download = (localName.replace(/\.(p7s|p7m|cms)$/i, '') || 'signature') + '.renewed.p7s';
+      $('#renew-download').hidden = false; $('#renew-archive').hidden = true;
+      renewStatus(`Архивная метка добавлена: ${new Date(data.archive.time).toLocaleString('ru-RU')}, ${data.archive.authority}. Архивных меток в подписи: ${data.archives}. Прежние подписи, метки и данные проверки сохранены, подпись проверена заново.`);
+    };
+    renewWorker.postMessage({ kind: 'renew-archive', signature, original }, original ? [signature, original] : [signature]); original = null;
+  } catch (error) { renewWorker?.terminate(); renewWorker = null; $('#renew-archive').disabled = false; renewStatus(error.message, true); }
+  finally { if (original?.byteLength) new Uint8Array(original).fill(0); }
+});
 $('#check-revocation').addEventListener('change', () => {
   if (verifyMode) $('#footer-note').lastChild.textContent = $('#check-revocation').checked ? 'В НУЦ уйдут только серийные номера сертификатов' : 'Данные не отправляются в сеть';
 });
@@ -397,7 +434,7 @@ $('#cancel').addEventListener('click', async () => {
 });
 function localMode(mode, push = true) {
   if (id) return;
-  verifyMode = mode === 'verify'; finished = false; dropDocument(); lock(); previewGeneration++;
+  verifyMode = mode === 'verify'; finished = false; dropDocument(); lock(); stopRenewal(); previewGeneration++;
   request = null; signatureInfo = null;
   signatureFile?.fill(0); signatureFile = null; createdSignature?.fill(0); createdSignature = null;
   for (const selector of ['#document', '#original', '#key-file']) $(selector).value = '';
@@ -450,7 +487,7 @@ $('#verify-created').addEventListener('click', async () => {
   } catch (error) { report(error.message, true); }
   finally { value.fill(0); }
 });
-window.addEventListener('pagehide', () => { dropDocument(); lock(); signatureFile?.fill(0); createdSignature?.fill(0); if (downloadUrl) URL.revokeObjectURL(downloadUrl); });
+window.addEventListener('pagehide', () => { dropDocument(); lock(); stopRenewal(); signatureFile?.fill(0); createdSignature?.fill(0); if (downloadUrl) URL.revokeObjectURL(downloadUrl); });
 setInterval(() => {
   if (finished || Date.now() < deadline) return;
   finished = true; lock(); report('Время операции истекло. Повторите запрос или откройте инструмент заново.', true);
