@@ -380,6 +380,8 @@ jobs:
           echo "DSS_VALIDATOR=$RUNNER_TEMP/dss" >> "$GITHUB_ENV"
       - run: npm run build
       - run: node tests/e2e.mjs
+      - name: File limits at the boundary, cancellation, retry
+        run: node tests/e2e-limits.mjs
       - name: Screenshots on failure
         if: failure()
         uses: actions/upload-artifact@v4

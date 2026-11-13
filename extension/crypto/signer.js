@@ -280,7 +280,9 @@ export async function openContainer(container, password, options = {}) {
 
 // exportKey is for the password change only: the signer then also returns the PKCS#8 and the
 // container layout, and stays inside the worker like every other opened key.
-async function openAuthenticatedContainer(container, password, { now = Date.now(), exportKey = false } = {}, state) {
+// repackExpired (with exportKey) lets the password change open a key whose certificate has expired;
+// every other check still applies, and such a key refuses to sign.
+async function openAuthenticatedContainer(container, password, { now = Date.now(), exportKey = false, repackExpired = false } = {}, state) {
   const { profile } = state;
   inspectPkcs12(container);
   profile.size = container.length;
@@ -349,7 +351,8 @@ async function openAuthenticatedContainer(container, password, { now = Date.now(
         }
       } else continue;
       state.stage = 'certificate';
-      if (now < Date.parse(info.summary.notBefore) || now > Date.parse(info.summary.notAfter)) {
+      const expired = now > Date.parse(info.summary.notAfter);
+      if (now < Date.parse(info.summary.notBefore) || (expired && !(repackExpired && exportKey))) {
         if (key instanceof Uint8Array) key.fill(0);
         const error = new ContainerError(undefined, 'CERTIFICATE_NOT_VALID_NOW');
         error.certificate = { ...info.summary };
@@ -365,6 +368,7 @@ async function openAuthenticatedContainer(container, password, { now = Date.now(
       const exported = exportKey ? {
         contents: { ...profile.bags }, protection: { integrity: profile.integrity, encryption: profile.encryption },
         alias: typeof keyBag.attributes?.friendlyName?.[0] === 'string' ? keyBag.attributes.friendlyName[0] : undefined,
+        expired,
         privateKeyInfo() {
           if (!exportable) throw new Error('Ключ уже закрыт.');
           return exportable.key ? forge.pki.wrapRsaPrivateKey(forge.pki.privateKeyToAsn1(exportable.key)) : exportable.asn1;
@@ -379,6 +383,7 @@ async function openAuthenticatedContainer(container, password, { now = Date.now(
             length: info.algorithm.length, sBox: 'D-TEST' }).digest(data));
         },
         async sign(data) {
+          if (expired) throw new ContainerError(undefined, 'CERTIFICATE_NOT_VALID_NOW');
           if (info.keyOid === O.rsa) {
             const result = new Uint8Array(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, data));
             if (!await crypto.subtle.verify('RSASSA-PKCS1-v1_5', publicKey, result, data)) throw new Error('Самопроверка подписи не пройдена.');
@@ -387,6 +392,7 @@ async function openAuthenticatedContainer(container, password, { now = Date.now(
           return this.signDigest(await this.digest(data));
         },
         async signDigest(hash) {
+          if (expired) throw new ContainerError(undefined, 'CERTIFICATE_NOT_VALID_NOW');
           const expectedLength = info.keyOid === O.rsa ? 32 : info.algorithm.length / 8;
           if (hash.length !== expectedLength) throw new Error(`Ожидается хеш длиной ${expectedLength} байт.`);
           if (info.keyOid === O.rsa) {

@@ -230,7 +230,8 @@ try {
   await popup.locator('#copy-diagnostic').click();
   await popup.locator('#copy-diagnostic').filter({ hasText: 'Скопировано' }).waitFor();
   await page.bringToFront();
-  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), expiredText);
+  // The Windows clipboard stores line breaks as CRLF.
+  assert.equal((await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n'), expiredText);
   await page.evaluate(() => navigator.clipboard.writeText(''));
   await popup.bringToFront();
   assert.equal(await popup.locator('#approve').isDisabled(), true);
@@ -674,6 +675,32 @@ try {
     await passwordTool.locator('#again').click();
     await passwordTool.locator('#change-form:not([hidden])').waitFor();
     console.log(`PASS: password change ${label}: cancelled file choice and cancelled operation (button, Escape) leave no file and wipe passwords; wrong old and weak new passwords refused, the copy opens with the new password in the signing tool, the old password fails, key and certificates unchanged, original untouched`);
+  }
+  // An expired certificate: the change goes through and says the key cannot sign; the signing tool still refuses it.
+  {
+    const expired = rsaFixture({ keyUsage: SIGNATURE_USAGE, subject: '/CN=Tegin expired disposable test', validity: { notBefore: new Date(Date.now() - 400 * 86400000), notAfter: new Date(Date.now() - 86400000) } });
+    await passwordTool.locator('#key-file').setInputFiles({ name: 'expired-key.p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(expired.container) });
+    await passwordTool.locator('#old-password').fill(PASSWORD);
+    for (const field of ['#new-password', '#repeat-password']) await passwordTool.locator(field).fill(NEW_PASSWORD);
+    await passwordTool.locator('#submit').click();
+    await passwordTool.locator('#result:not([hidden])').waitFor({ timeout: 60000 });
+    assert.match(await passwordTool.locator('#result-holder').textContent(), /сертификат истёк .*, подписывать этим ключом нельзя/);
+    const download = passwordTool.waitForEvent('download'); await passwordTool.locator('#download').click();
+    const changed = new Uint8Array(readFileSync(await (await download).path()));
+    await assert.rejects(openContainer(changed, NEW_PASSWORD), { code: 'CERTIFICATE_NOT_VALID_NOW' });
+    const check = await context.newPage();
+    await check.goto(`chrome-extension://${extensionId}/signing/approve.html`);
+    await check.locator('#document').setInputFiles({ name: 'test.txt', mimeType: 'text/plain', buffer: data });
+    await check.locator('#key-file').setInputFiles({ name: 'expired-key (новый пароль).p12', mimeType: 'application/x-pkcs12', buffer: Buffer.from(changed) });
+    await check.locator('#password').fill(NEW_PASSWORD); await check.locator('#unlock').click();
+    await check.locator('#key-diagnostic-data').filter({ hasText: 'CERTIFICATE_NOT_VALID_NOW' }).waitFor({ state: 'attached' });
+    assert.equal(await check.locator('#approve').isDisabled(), true);
+    await check.close();
+    await passwordTool.bringToFront();
+    await passwordTool.locator('#again').click();
+    await passwordTool.locator('#change-form:not([hidden])').waitFor();
+    expired.container.fill(0);
+    console.log('PASS: password change with an expired certificate: the copy is made and labelled as unable to sign; the signing tool refuses it with CERTIFICATE_NOT_VALID_NOW');
   }
   await passwordTool.setViewportSize({ width: 400, height: 900 });
   await passwordTool.screenshot({ path: resolve('artifacts/password-400.png'), fullPage: true });

@@ -671,7 +671,7 @@
         if (compare(v, ONE) !== 0)
             return ZERO;
         if (compare(d, m) >= 0)
-            return subtract(d, m);
+            return sub(d, m);
         if (sig(d) < 0)
             addTo(d, m, d);
         else

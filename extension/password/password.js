@@ -79,7 +79,7 @@ function change(container, oldPassword, newPassword) {
 
 const MESSAGES = {
   PASSWORD_OR_DAMAGED: 'Текущий пароль не подошёл или файл повреждён.',
-  CERTIFICATE_NOT_VALID_NOW: 'Срок действия сертификата этого ключа ещё не наступил или уже истёк. Такой ключ Tegin не перезаписывает.'
+  CERTIFICATE_NOT_VALID_NOW: 'Срок действия сертификата этого ключа ещё не наступил. Такой ключ Tegin не перезаписывает.'
 };
 
 form.addEventListener('submit', async event => {
@@ -98,7 +98,8 @@ form.addEventListener('submit', async event => {
     clearPasswords();
     const { certificate, protection } = result;
     const until = new Date(certificate.notAfter).toLocaleDateString('ru-RU');
-    $('#result-holder').textContent = [certificate.name || 'Владелец не указан', certificate.algorithm, `сертификат до ${until}`].join(' · ');
+    $('#result-holder').textContent = [certificate.name || 'Владелец не указан', certificate.algorithm,
+      certificate.expired ? `сертификат истёк ${until}, подписывать этим ключом нельзя` : `сертификат до ${until}`].join(' · ');
     $('#protection-before').textContent = [protection.before.integrity, ...protection.before.encryption].join('; ');
     $('#protection-after').textContent = [protection.after.integrity, ...protection.after.encryption].join('; ');
     if (downloadUrl) URL.revokeObjectURL(downloadUrl);

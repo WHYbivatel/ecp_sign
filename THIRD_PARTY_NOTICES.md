@@ -15,6 +15,9 @@ globalThis factory context, replacement of the random adapter by mandatory
 Web Crypto getRandomValues, rejection of zero signature components, and a
 boolean check fix for the zero-digest verification case. The latter follows
 GOST verification step 3 and prevents attempting to invert zero.
+In `invMod`, the final reduction called an undefined `subtract`; it now calls the
+file's own `sub` (jsbn `BigInteger.subtract`). Before the fix about 1 in 17 000
+inversions on the 256-bit field threw a ReferenceError during signing or verification.
 A copy-only public curve-parameter accessor is exposed for point validation.
 Modern Kazakhstan GOST-256 parameters are supplied explicitly because the
 old upstream T-256-A alias refers to CryptoPro-A.

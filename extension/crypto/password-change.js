@@ -40,7 +40,9 @@ export async function changeContainerPassword(container, oldPassword, newPasswor
 async function changePassword(container, oldPassword, newPassword, options) {
   if (typeof newPassword !== 'string' || !CHANGE_PASSWORD_RULE.test(newPassword)) fail('CHANGEPASS_INCORRECT_NEWPASS_PATTERN', CHANGE_PASSWORD_HINT);
   if (newPassword === oldPassword) fail('CHANGEPASS_SAME_PASSWORD', 'Новый пароль совпадает со старым.');
-  const opened = await openContainer(container, oldPassword, { ...options, exportKey: true });
+  // An expired certificate alone does not block the change: the MAC, the key against the certificate and the
+  // self-check below still apply, and the new file keeps the same key and certificates. Signing still refuses it.
+  const opened = await openContainer(container, oldPassword, { ...options, exportKey: true, repackExpired: true });
   let reopened;
   try {
     // NCALayer refuses keys without a certificate; Tegin also keeps the file to one key and its
@@ -51,14 +53,14 @@ async function changePassword(container, oldPassword, newPassword, options) {
     const certificates = [leaf, ...opened.certificates.map(der).filter(raw => raw !== leaf)];
     const result = writePkcs12(privateInfo, certificates, newPassword, { friendlyName: opened.alias });
 
-    reopened = await openContainer(result, newPassword, { ...options, exportKey: true });
+    reopened = await openContainer(result, newPassword, { ...options, exportKey: true, repackExpired: true });
     const same = der(reopened.privateKeyInfo()) === der(privateInfo) && reopened.info.raw === leaf
       && JSON.stringify(sortedDer(reopened.certificates)) === JSON.stringify(sortedDer(opened.certificates));
     if (!same) fail('CHANGEPASS_SELF_CHECK', 'Новый контейнер не прошёл самопроверку: ключ или сертификаты отличаются.');
     try { (await openContainer(result, oldPassword, options)).destroy(); fail('CHANGEPASS_SELF_CHECK', 'Новый контейнер открывается старым паролем.'); }
     catch (error) { if (!(error instanceof ContainerError && error.code === 'PASSWORD_OR_DAMAGED')) throw error; }
 
-    return { container: result, certificate: opened.info.summary, alias: opened.alias,
+    return { container: result, certificate: { ...opened.info.summary, expired: opened.expired }, alias: opened.alias,
       protection: { before: describeProtection(opened.protection), after: describeProtection(reopened.protection) } };
   } finally { opened.destroy(); reopened?.destroy(); }
 }

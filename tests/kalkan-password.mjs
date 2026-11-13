@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { changeContainerPassword } from '../extension/crypto/password-change.js';
+import { rsaFixture, PASSWORD } from './helpers/fixtures.js';
 
 const jars = process.env.NCA_KALKAN_JARS;
 if (!jars) throw new Error('Set NCA_KALKAN_JARS to the provider and XMLDSig jars (separated by the OS classpath delimiter).');
@@ -39,5 +40,18 @@ try {
         + `same key, certificates and alias, old password rejected | ${result.protection.before.integrity} -> ${result.protection.after.integrity}`);
     }
   }
-  console.log(`Kalkan password change: ${passed}/12`);
+  // An expired certificate: the change is allowed, Kalkan sees the same key and certificates.
+  const day = 24 * 60 * 60 * 1000;
+  const expired = rsaFixture({ subject: '/CN=Tegin expired disposable test', validity: { notBefore: new Date(Date.now() - 400 * day), notAfter: new Date(Date.now() - day) } });
+  const original = join(folder, 'expired.p12'), changed = join(folder, 'expired-changed.p12');
+  writeFileSync(original, expired.container);
+  const result = await changeContainerPassword(expired.container.slice(), PASSWORD, NEW_PASSWORD);
+  assert.equal(result.certificate.expired, true);
+  writeFileSync(changed, result.container);
+  const report = run(PASSWORD, 'Pkcs12Interop', 'compare', original, changed);
+  assert.match(report, /KALKAN SAME KEY AND CERTIFICATES/);
+  assert.match(report, /KALKAN OLD PASSWORD REJECTED/);
+  passed++;
+  console.log('PASS OpenSSL RSA with an expired certificate: Tegin changed the password; Kalkan opens the new file, same key and certificates, old password rejected');
+  console.log(`Kalkan password change: ${passed}/13`);
 } finally { rmSync(folder, { recursive: true, force: true }); }

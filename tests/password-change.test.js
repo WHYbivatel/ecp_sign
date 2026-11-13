@@ -123,3 +123,31 @@ test('the export accessor is absent from ordinary opens and closed after destroy
   exporting.destroy();
   assert.throws(() => exporting.privateKeyInfo(), /закрыт/);
 });
+
+test('an expired certificate alone does not block the change; the key and certificates are kept and the key still refuses to sign', async () => {
+  const day = 24 * 60 * 60 * 1000;
+  const fixture = rsaFixture({ validity: { notBefore: new Date(Date.now() - 400 * day), notAfter: new Date(Date.now() - day) } });
+  await assert.rejects(openContainer(fixture.container, PASSWORD), { code: 'CERTIFICATE_NOT_VALID_NOW' });
+  await assert.rejects(openContainer(fixture.container, PASSWORD, { repackExpired: true }), { code: 'CERTIFICATE_NOT_VALID_NOW' }, 'the option works only for the password change');
+  const original = fixture.container.slice();
+  const changed = await changeContainerPassword(fixture.container, PASSWORD, NEW_PASSWORD);
+  assert.deepEqual(fixture.container, original);
+  assert.equal(changed.certificate.expired, true);
+  const before = await openContainer(original, PASSWORD, { exportKey: true, repackExpired: true });
+  const after = await openContainer(changed.container, NEW_PASSWORD, { exportKey: true, repackExpired: true });
+  try {
+    assert.equal(der(after.privateKeyInfo()), der(before.privateKeyInfo()));
+    assert.equal(after.info.raw, before.info.raw);
+    assert.deepEqual(after.certificates.map(der).sort(), before.certificates.map(der).sort());
+    await assert.rejects(after.sign(data), { code: 'CERTIFICATE_NOT_VALID_NOW' });
+    await assert.rejects(after.signDigest(new Uint8Array(32)), { code: 'CERTIFICATE_NOT_VALID_NOW' });
+  } finally { before.destroy(); after.destroy(); }
+  await assert.rejects(openContainer(changed.container, NEW_PASSWORD), { code: 'CERTIFICATE_NOT_VALID_NOW' }, 'signing still refuses the expired key');
+  await assert.rejects(changeContainerPassword(changed.container, 'WrongPass2026', 'OtherPass2026'), { code: 'PASSWORD_OR_DAMAGED' });
+});
+
+test('a certificate that is not valid yet still blocks the change', async () => {
+  const day = 24 * 60 * 60 * 1000;
+  const fixture = rsaFixture({ validity: { notBefore: new Date(Date.now() + day), notAfter: new Date(Date.now() + 400 * day) } });
+  await assert.rejects(changeContainerPassword(fixture.container, PASSWORD, NEW_PASSWORD), { code: 'CERTIFICATE_NOT_VALID_NOW' });
+});

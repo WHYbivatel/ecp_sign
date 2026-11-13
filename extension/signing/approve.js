@@ -6,7 +6,11 @@ const $ = selector => document.querySelector(selector);
 const api = globalThis.browser || chrome;
 const id = location.hash.slice(1);
 let verifyMode = !id && new URLSearchParams(location.search).get('mode') === 'verify';
-const DOC_LIMIT = 2 * 1024 * 1024, SIGNATURE_LIMIT = 8 * 1024 * 1024;
+// A signature with the document inside needs about 30 bytes of memory per document byte; a detached signature only
+// hashes the document (docs/file-limits.md). The larger limit applies to detached signing and to the original of a
+// detached signature.
+const DOC_LIMIT = 2 * 1024 * 1024, DETACHED_LIMIT = 16 * 1024 * 1024, SIGNATURE_LIMIT = 8 * 1024 * 1024;
+const DETACHED_FORMATS = ['cms-detached', 'cades-detached'];
 let request, worker, selectedCertificate, signatureFile, localName = '', generation = 0, previewGeneration = 0;
 let finished = false, busy = false, downloadUrl, deadline = Date.now() + 180000;
 let signatureInfo, createdSignature, createdName = '', viewAnimation, pdfInspector, documentRevision = 0;
@@ -149,8 +153,14 @@ async function localDocument(autoVerify = false) {
   if (!file) { await showData(); updateControls(); return; }
   localName = file.name;
   $('#document-label').textContent = file.name; $('#document-hint').textContent = `${sizeLabel(file.size)} · нажмите, чтобы заменить`;
-  const limit = verifyMode ? SIGNATURE_LIMIT : DOC_LIMIT;
-  if (file.size > limit) throw new Error(`Файл превышает ${limit / 1024 / 1024} МБ.`);
+  const detached = !verifyMode && DETACHED_FORMATS.includes($('#format').value);
+  const limit = verifyMode ? SIGNATURE_LIMIT : detached ? DETACHED_LIMIT : DOC_LIMIT;
+  if (file.size > limit) {
+    if (verifyMode) throw new Error('Файл превышает 8 МБ.');
+    if (detached || file.size > DETACHED_LIMIT) throw new Error('Файл превышает 16 МБ.');
+    $('#advanced-settings').open = true;
+    throw new Error('Файл больше 2 МБ. Его можно подписать отдельной подписью до 16 МБ: выберите в формате результата «отдельная подпись».');
+  }
   const buffer = new Uint8Array(await file.arrayBuffer());
   const current = generation;
   try {
@@ -360,7 +370,7 @@ async function verifySelected() {
   try {
     lock(); const current = generation; busy = true; updateControls(); report('Проверяем подпись и цепочку сертификата…');
     const file = signatureInfo.attached ? undefined : $('#original').files[0];
-    if (file?.size > DOC_LIMIT) throw new Error('Исходный документ превышает 2 МБ.');
+    if (file?.size > DETACHED_LIMIT) throw new Error('Исходный документ превышает 16 МБ.');
     original = file ? await file.arrayBuffer() : undefined;
     if (current !== generation) return;
     startWorker(current, async data => {
@@ -403,7 +413,7 @@ function localMode(mode, push = true) {
   $('#file-heading').textContent = verifyMode ? 'Подписанный файл' : 'Документ';
   $('#document').accept = verifyMode ? '.p7s,.p7m,.cms' : '';
   $('#document-label').textContent = verifyMode ? 'Выберите подписанный файл' : 'Выберите или перетащите файл';
-  $('#document-hint').textContent = verifyMode ? '.p7s, .p7m или .cms · до 8 МБ' : 'До 2 МБ · данные обрабатываются локально';
+  $('#document-hint').textContent = verifyMode ? '.p7s, .p7m или .cms · до 8 МБ' : 'До 2 МБ, отдельная подпись до 16 МБ · данные обрабатываются локально';
   $('#format-controls').hidden = verifyMode; $('#key-form').hidden = verifyMode; $('#verify-info').hidden = !verifyMode;
   $('#approve').hidden = verifyMode; $('#verify-submit').hidden = !verifyMode;
   $('#cancel').hidden = true;
