@@ -91,11 +91,14 @@ jobs:
           - { os: macos-latest, browser: firefox }
           - { os: ubuntu-latest, browser: firefox }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     env:
       TEGIN_BROWSER: ${{ matrix.browser }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The update test builds the published commit (dd40b5e) from source.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -145,6 +148,12 @@ jobs:
         shell: bash
         run: |
           if [ "$TEGIN_BROWSER" = firefox ]; then node tests/e2e-issuance-firefox.mjs; else node tests/e2e-issuance.mjs; fi
+      # The build tegin.esl.kz serves (SHA-256 from website/releases.json) updated in place to this commit; rollback;
+      # move to another extension ID through backups. Chromium family also rebuilds dd40b5e from source.
+      - name: Update from the published build
+        shell: bash
+        run: |
+          if [ "$TEGIN_BROWSER" = firefox ]; then node tests/e2e-update-firefox.mjs; else node tests/e2e-update.mjs; fi
       - name: Password change of Kalkan-created keys, checked by Kalkan
         if: matrix.browser == 'chromium'
         run: node tests/kalkan-password.mjs
@@ -261,8 +270,8 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run package
-      - name: Archives checked as shipped; Chromium archive loaded unpacked
-        run: node scripts/verify-package.mjs --smoke
+      - name: Archives checked as shipped; Chromium archive loaded unpacked; clean tree, artifacts tied to the commit
+        run: node scripts/verify-package.mjs --smoke --release
       - name: Firefox archive through the AMO validator
         run: npx --yes addons-linter@10.15.0 dist/tegin-firefox-*.zip
       - uses: actions/upload-artifact@v4
@@ -271,6 +280,7 @@ jobs:
           path: |
             dist/tegin-*.zip
             dist/checksums.json
+            dist/release.json
           retention-days: 14
 
   full-e2e-linux:

@@ -17,7 +17,11 @@ const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).
 await rm(resolve('dist', source), { force: true });
 execFileSync('git', ['archive', '--format=zip', `--prefix=tegin-source-${version}/`, '-o', resolve('dist', source), commit]);
 hashes[source] = createHash('sha256').update(await readFile(resolve('dist', source))).digest('hex');
-if (execFileSync('git', ['status', '--porcelain', '--', 'extension', 'scripts', 'package.json', 'package-lock.json'], { encoding: 'utf8' }).trim())
-  console.warn(`Uncommitted changes: ${source} holds commit ${commit.slice(0, 12)}, not the working copy the extension archives were built from.`);
+const clean = !execFileSync('git', ['status', '--porcelain', '--', 'extension', 'scripts', 'vendor', 'package.json', 'package-lock.json'], { encoding: 'utf8' }).trim();
+if (!clean) console.warn(`Uncommitted changes: ${source} holds commit ${commit.slice(0, 12)}, not the working copy the extension archives were built from.`);
 await writeFile(resolve('dist/checksums.json'), JSON.stringify(hashes, null, 2) + '\n');
+// Ties every artifact to the commit it was built from; a release is only cut from a clean tree.
+const artifacts = {};
+for (const [name, sha256] of Object.entries(hashes)) artifacts[name] = { size: (await readFile(resolve('dist', name))).length, sha256 };
+await writeFile(resolve('dist/release.json'), JSON.stringify({ version, commit, clean, node: process.version, artifacts }, null, 2) + '\n');
 console.log(`Packaged Tegin ${version} for Chromium and Firefox and the source of ${commit.slice(0, 12)}; dist/checksums.json contains SHA-256.`);

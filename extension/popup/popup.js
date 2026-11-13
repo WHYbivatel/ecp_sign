@@ -1,4 +1,5 @@
 import { listRecords } from '../lib/issuance-store.js';
+import { registerSite } from '../lib/connected-sites.js';
 
 document.querySelector('#modules').addEventListener('click', () => { location.assign((globalThis.browser || chrome).runtime.getURL('modules/index.html')); });
 const api = globalThis.browser || chrome;
@@ -91,19 +92,7 @@ enable.addEventListener('click', async () => {
     if (!current.allowed) {
       if (!await api.permissions.request({ origins: [current.origin] })) throw new Error('Доступ не предоставлен. Вы можете повторить подключение позже.');
     }
-    if (!current.builtin) {
-      const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(current.origin)));
-      const id = [...digest.slice(0, 12)].map(byte => byte.toString(16).padStart(2, '0')).join('');
-      const scripts = await api.scripting.getRegisteredContentScripts();
-      const existing = scripts.filter(script => [`main-${id}`, `bridge-${id}`].includes(script.id));
-      if (existing.length !== 2) {
-        if (existing.length) await api.scripting.unregisterContentScripts({ ids: existing.map(script => script.id) });
-        await api.scripting.registerContentScripts([
-        { id: `main-${id}`, matches: [current.origin], js: ['content/inject.js'], world: 'MAIN', runAt: 'document_start', allFrames: true },
-        { id: `bridge-${id}`, matches: [current.origin], js: ['content/bridge.js'], runAt: 'document_start', allFrames: true }
-        ]);
-      }
-    }
+    if (!current.builtin) await registerSite(api, current.origin);
     await api.tabs.reload(current.tabId); window.close();
   } catch (error) { status.textContent = error.message; enable.disabled = false; }
 });

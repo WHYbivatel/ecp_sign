@@ -100,6 +100,17 @@ const again = execFileSync('git', ['archive', '--format=zip', `--prefix=${source
 assert.ok(again.equals(sourceBytes), `${sourceName}: differs from git archive of ${commit.slice(0, 12)}`);
 console.log(`PASS: ${sourceName}: ${sourceFiles.length} files of commit ${commit.slice(0, 12)}, SHA-256 ${checksums[sourceName].slice(0, 16)}…; no .p12/.pfx/.env, dist/ or node_modules/; git archive gives the same bytes`);
 
+const release = JSON.parse(await readFile(join(dist, 'release.json'), 'utf8'));
+assert.equal(release.version, version);
+assert.equal(release.commit, commit, 'dist/release.json was written for another commit');
+assert.deepEqual(Object.keys(release.artifacts).sort(), Object.keys(checksums).sort());
+for (const [file, { size, sha256 }] of Object.entries(release.artifacts)) {
+  const bytes = await readFile(join(dist, file));
+  assert.equal(bytes.length, size, `${file}: size`); assert.equal(sha256, checksums[file], `${file}: SHA-256`);
+}
+if (process.argv.includes('--release')) assert.equal(release.clean, true, 'a release candidate must be packaged from a clean tree');
+console.log(`PASS: dist/release.json: ${version} from ${commit.slice(0, 12)}${release.clean ? '' : ' (uncommitted changes in the tree)'}, ${Object.keys(release.artifacts).length} artifacts with size and SHA-256`);
+
 if (process.argv.includes('--smoke')) {
   const { launchExtension, extensionWorker } = await import('../tests/helpers/browser.js');
   const folder = await mkdtemp(join(tmpdir(), 'tegin-package-'));

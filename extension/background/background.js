@@ -2,6 +2,7 @@ import { findModule, enforceSettings } from '../modules/registry.js';
 import { assembleResult } from '../modules/adapters.js';
 import { normalizeRequest, successResponse, errorResponse } from '../signing/protocol.js';
 import { isIssuanceRequest, issuanceOrigin, normalizeIssuance, issuanceResult, issuanceError } from '../signing/issuance-protocol.js';
+import { restoreSites, forgetSites } from '../lib/connected-sites.js';
 import { DIAGNOSTIC_PREFIX, DIAGNOSTIC_LIMIT, diagnosticEntry, responseCode } from '../signing/diagnostics.js';
 
 const PREFIX = 'pending:';
@@ -176,6 +177,12 @@ api.windows.onRemoved.addListener(windowId => {
     }
   }).catch(() => {});
 });
+// The adapter on connected sites follows the origins the browser has granted.
+const syncSites = () => restoreSites(api).catch(() => {});
+api.runtime.onInstalled.addListener(syncSites);
+api.runtime.onStartup.addListener(syncSites);
+api.permissions.onAdded.addListener(syncSites);
+api.permissions.onRemoved.addListener(({ origins = [] }) => { forgetSites(api, origins).catch(() => {}); });
 api.alarms.onAlarm.addListener(alarm => {
   if (!alarm.name.startsWith(PREFIX)) return;
   queue = queue.then(async () => {
