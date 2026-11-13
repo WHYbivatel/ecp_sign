@@ -116,6 +116,8 @@ try {
   }));
   const download = tool.waitForEvent('download'); await tool.locator('#download').click();
   const signature = join(folder, 'detached.p7s'); await (await download).saveAs(signature);
+  // OpenSSL takes -content even when the document is inside, so the signature size shows it is detached.
+  assert.ok(readFileSync(signature).length < 64 * 1024, 'the 16 MB document is not inside the signature');
   execFileSync('openssl', ['cms', '-verify', '-binary', '-inform', 'DER', '-in', signature, '-content', join(folder, 'document.bin'), '-CAfile', join(folder, 'cert.pem'), '-purpose', 'any', '-out', join(folder, 'out.bin')], { stdio: 'pipe' });
   assert.ok(readFileSync(join(folder, 'out.bin')).equals(atLimit));
   console.log('PASS: RSA detached CMS of a 16 MB file verified by OpenSSL against the original');

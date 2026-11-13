@@ -29,12 +29,16 @@ export async function longTermHarness({ ocspStatus = 'good' } = {}) {
   const testIssuers = { [await fingerprintOf(ca)]: { like: 'nca_rsa_2022' }, [await fingerprintOf(root)]: { like: 'root' } };
   const calls = [];
   const reply = (body, type) => new Response(body, { status: 200, headers: { 'content-type': type } });
+  // One publication per CRL, as at a real CA between issues: two fetches within one test get the same bytes
+  // even across a second boundary, so the embedded copies deduplicate.
+  const published = new Map();
+  const publication = (url, make) => { if (!published.has(url)) published.set(url, make()); return published.get(url); };
   const fetchImpl = async (url, init) => {
     calls.push(url);
     if (url === OCSP_URL) return reply(ocspResponse(parseOcspRequest(new Uint8Array(init.body)), { signer: responder, status: ocspStatus, revocationTime: Date.now() - 60000, reason: 1 }), 'application/ocsp-response');
-    if (url === 'https://crl.root.gov.kz/rsa2020.crl') return reply(crl(root, { number: 3 }), 'application/pkix-crl');
-    if (url.endsWith('/nca_rsa_2022.crl')) return reply(crl(ca, { number: 5 }), 'application/octet-stream');
-    if (url.endsWith('/nca_d_rsa_2022.crl')) return reply(crl(ca, { number: 6, deltaBase: 5 }), 'application/octet-stream');
+    if (url === 'https://crl.root.gov.kz/rsa2020.crl') return reply(publication(url, () => crl(root, { number: 3 })), 'application/pkix-crl');
+    if (url.endsWith('/nca_rsa_2022.crl')) return reply(publication(url, () => crl(ca, { number: 5 })), 'application/octet-stream');
+    if (url.endsWith('/nca_d_rsa_2022.crl')) return reply(publication(url, () => crl(ca, { number: 6, deltaBase: 5 })), 'application/octet-stream');
     throw new Error('unexpected URL ' + url);
   };
   const checker = new RevocationChecker({ fetchImpl, store: memoryStore(), testIssuers });

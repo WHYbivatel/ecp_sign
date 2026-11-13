@@ -50,12 +50,24 @@ function gostPoint(spki) {
   return bytes(parse(bits.slice(1)).value);
 }
 
-export async function generateKey(spec) {
+// Kalkan 0.7.8 (the provider behind NCALayer) draws a GOST key again while either coordinate starts or ends
+// with a zero byte, and re-encodes such a public key wrongly when it issues a certificate from the request:
+// the certificate then names another key and cannot be installed. Keys from Tegin follow the same rule.
+export function kalkanCompatiblePoint(point) {
+  const half = point.length / 2;
+  return point[0] !== 0 && point[half - 1] !== 0 && point[half] !== 0 && point[point.length - 1] !== 0;
+}
+
+export async function generateKey(spec, { engine } = {}) {
   if (spec.kind === 'gost') {
-    const pair = gostEngine(spec.scheme).generateKey();
-    const scalar = new Uint8Array(pair.privateKey).slice(), point = new Uint8Array(pair.publicKey).slice();
-    new Uint8Array(pair.privateKey).fill(0);
-    return { spec, scalar, point, spki: seq(gostAlgorithm(spec), bitString(der(octet(point)))) };
+    const source = engine || gostEngine(spec.scheme);
+    for (;;) {
+      const pair = source.generateKey();
+      const scalar = new Uint8Array(pair.privateKey).slice(), point = new Uint8Array(pair.publicKey).slice();
+      new Uint8Array(pair.privateKey).fill(0);
+      if (kalkanCompatiblePoint(point)) return { spec, scalar, point, spki: seq(gostAlgorithm(spec), bitString(der(octet(point)))) };
+      scalar.fill(0);
+    }
   }
   const pair = await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: spec.length, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify']);
   return { spec, privateKey: pair.privateKey, publicKey: pair.publicKey, spki: parse(new Uint8Array(await crypto.subtle.exportKey('spki', pair.publicKey))) };
