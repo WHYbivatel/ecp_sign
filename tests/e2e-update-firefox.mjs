@@ -79,6 +79,12 @@ async function extensionContext() {
   const approval = await extensionPage('signing/approve.html#', known);
   return { page, approval };
 }
+// The next page must not be created while the approval window is still closing.
+async function cancel(approval) {
+  await approval.click('#cancel');
+  for (let i = 0; i < 200 && (await browser.pages()).includes(approval); i++) await pause(50);
+  await pause(200);
+}
 async function open(context, path) {
   const known = new Set(await browser.pages());
   await context.evaluate(url => browser.tabs.create({ url }), `${BASE}/${path}`);
@@ -138,7 +144,7 @@ try {
   const before = await manager.evaluate(() => browser.storage.local.get(null));
   const scriptsBefore = await manager.evaluate(() => browser.scripting.getRegisteredContentScripts().then(list => list.map(script => script.id).sort()));
   assert.equal(scriptsBefore.length, 2);
-  await approval.click('#cancel');
+  await cancel(approval);
   assert.match(await nursign('https://shop.example.kz'), /не разрешён в настройках модуля/);
   await browser.close();
   console.log(`PASS: published Firefox ${PUBLISHED.firefox.version}: a site outside .kz connected through the popup (permission granted, adapter on the page), module settings with an allowed site`);
@@ -155,7 +161,7 @@ try {
   assert.deepEqual(scriptsAfter, scriptsBefore);
   const edoAgain = await site(`${SITE}/`);
   await edoAgain.waitForFunction(() => window.WebSocket.__ncaBrowserAdapter === true, { timeout: 15000 });
-  await approval.click('#cancel');
+  await cancel(approval);
   assert.match(await nursign('https://shop.example.kz'), /не разрешён в настройках модуля/);
   assert.match(await nursign('https://goszakup.gov.kz'), /обязательную метку/);
   console.log(`PASS: update Firefox ${PUBLISHED.firefox.version} → ${version} in the same profile: storage.local unchanged, the granted site and its adapter scripts are there and the page gets the adapter; module settings and the allowed site apply`);
@@ -170,7 +176,7 @@ try {
   await restored.waitForFunction(() => window.WebSocket.__ncaBrowserAdapter === true, { timeout: 15000 });
   ({ page: helper, approval } = await extensionContext());
   assert.deepEqual(await approval.evaluate(() => browser.scripting.getRegisteredContentScripts().then(list => list.map(script => script.id).sort())), scriptsBefore);
-  await approval.click('#cancel');
+  await cancel(approval);
   console.log('PASS: adapter scripts removed while the site stays granted are registered again by the next install; the page gets the adapter without reconnecting');
 
   // Rollback with data the candidate saved: a pending request key, then the published build, then the candidate again.
@@ -187,7 +193,7 @@ try {
     worker.postMessage({ kind: 'issue-generate', request: { dn: [['2.5.4.3', 'ТЕСТОВ ТЕСТ']], email: '', keys: [{ algorithm: 'ECGOST3410-2015', length: 512 }] }, password, context: id });
   }), PASSWORD);
   const saved = await approval.evaluate(() => browser.storage.local.get(null));
-  await approval.click('#cancel');
+  await cancel(approval);
   await browser.close();
 
   browser = await launch();
@@ -205,7 +211,7 @@ try {
   assert.match(await oldPopup.$eval('#site-state', node => node.textContent), /Нужно обновить/);
   await oldPopup.click('#enable');
   await edoOld.waitForFunction(() => window.WebSocket.__ncaBrowserAdapter === true, { timeout: 15000 });
-  await approval.click('#cancel');
+  await cancel(approval);
   assert.match(await nursign('https://shop.example.kz'), /не разрешён в настройках модуля/);
   assert.match(await nursign('https://goszakup.gov.kz'), /обязательную метку/);
   await browser.close();
@@ -222,7 +228,7 @@ try {
   assert.equal((await keys.$$('.key-record')).length, 1);
   const edoBack = await site(`${SITE}/`);
   await edoBack.waitForFunction(() => window.WebSocket.__ncaBrowserAdapter === true, { timeout: 15000 });
-  await approval.click('#cancel');
+  await cancel(approval);
   console.log(`PASS: forward again ${PUBLISHED.firefox.version} → ${version}: the pending request key is byte for byte the saved one and is listed with its backup button; settings and the connected site are there`);
 
   assert.deepEqual(errors, []);

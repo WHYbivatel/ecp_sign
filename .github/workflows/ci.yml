@@ -148,7 +148,7 @@ jobs:
         shell: bash
         run: |
           if [ "$TEGIN_BROWSER" = firefox ]; then node tests/e2e-issuance-firefox.mjs; else node tests/e2e-issuance.mjs; fi
-      # The build tegin.esl.kz serves (SHA-256 from website/releases.json) updated in place to this commit; rollback;
+      # The build tegin.esl.kz serves (SHA-256 pinned in tests/helpers/published.js) updated in place to this commit; rollback;
       # move to another extension ID through backups. Chromium family also rebuilds dd40b5e from source.
       - name: Update from the published build
         shell: bash
@@ -320,5 +320,70 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: full-e2e
+          path: artifacts/
+          if-no-files-found: ignore
+
+  # The same full E2E (CMS, CAdES-T, XML, PAdES, CAdES-LT/LTA, password change, modules) in branded browsers.
+  full-e2e-browsers:
+    name: full E2E · ${{ matrix.browser }} · ${{ matrix.os }}
+    needs: unit
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, browser: chrome }
+          - { os: windows-latest, browser: msedge }
+          - { os: macos-latest, browser: chrome }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      TEGIN_BROWSER: ${{ matrix.browser }}
+      TEGIN_REQUIRE_DSS: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: OpenSSL 3 first in PATH
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"; fi
+          if [ "$RUNNER_OS" = Windows ]; then
+            for dir in "/c/Program Files/OpenSSL" "/c/Program Files/Git/mingw64"; do
+              module=$(find "$dir" -iname legacy.dll 2>/dev/null | head -1)
+              if [ -n "$module" ] && [ -x "$dir/bin/openssl.exe" ]; then
+                cygpath -w "$dir/bin" >> "$GITHUB_PATH"
+                echo "OPENSSL_MODULES=$(cygpath -w "$(dirname "$module")")" >> "$GITHUB_ENV"
+                break
+              fi
+            done
+          fi
+      - run: npm ci
+      - name: Browser
+        shell: bash
+        run: npx playwright install "$TEGIN_BROWSER" || true
+      - run: pip install pyHanko==0.38.0 pyhanko-certvalidator==0.33.0 asn1crypto==1.5.1
+      - name: EU DSS 6.5.1 validator (tests/interop/dss)
+        shell: bash
+        run: |
+          mvn -B -q -f tests/interop/dss/pom.xml dependency:copy-dependencies -DoutputDirectory="$RUNNER_TEMP/dss/lib"
+          javac -cp "$RUNNER_TEMP/dss/lib/*" -d "$RUNNER_TEMP/dss/classes" tests/interop/dss/Validate.java
+          echo "DSS_VALIDATOR=$RUNNER_TEMP/dss" >> "$GITHUB_ENV"
+      - run: npm run build
+      - run: node tests/e2e.mjs
+      - name: Screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-e2e-${{ matrix.browser }}-${{ matrix.os }}
           path: artifacts/
           if-no-files-found: ignore

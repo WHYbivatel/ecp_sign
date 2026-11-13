@@ -2,7 +2,7 @@ import { chromium } from 'playwright';
 import { createServer } from 'node:http';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir, homedir, devNull } from 'node:os';
-import { resolve, join } from 'node:path';
+import { resolve, join, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { rsaFixture, gostFixture, PASSWORD } from './helpers/fixtures.js';
@@ -20,8 +20,11 @@ import { DOMParser } from '@xmldom/xmldom';
 import { PDFDocument } from 'pdf-lib';
 import { catalog } from '../extension/modules/catalog.js';
 import { modules as moduleRegistry } from '../extension/modules/registry.js';
+import { browserName, browserVersion, extensionWorker, launchExtension } from './helpers/browser.js';
 
 if (process.env.TEGIN_REQUIRE_DSS && !process.env.DSS_VALIDATOR) throw new Error('TEGIN_REQUIRE_DSS is set, but DSS_VALIDATOR is empty: the browser PDFs would skip EU DSS and pyHanko');
+const dssClasspath = [`${process.env.DSS_VALIDATOR}/classes`, `${process.env.DSS_VALIDATOR}/lib/*`].join(delimiter);
+const PYTHON = process.platform === 'win32' ? 'python' : 'python3';
 const folder = mkdtempSync(join(tmpdir(), 'ncabrowser-e2e-'));
 const extension = resolve('dist/chromium');
 // Common Utils shows only signature or authentication keys, so its keys carry NCALayer key usages.
@@ -41,7 +44,7 @@ const port = server.address().port;
 const cache = join(homedir(), 'Library', 'Caches', 'ms-playwright');
 const fallback = existsSync(cache) ? readdirSync(cache).filter(name => /^chromium-\d+$/.test(name)).reverse()
   .map(name => join(cache, name, 'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing')).find(existsSync) : undefined;
-const executablePath = process.env.CHROMIUM_EXECUTABLE || (existsSync(chromium.executablePath()) ? chromium.executablePath() : fallback);
+if (!process.env.CHROMIUM_EXECUTABLE && !existsSync(chromium.executablePath()) && fallback) process.env.CHROMIUM_EXECUTABLE = fallback;
 let context;
 const liveTsp = process.env.NCA_LIVE_TSP === '1';
 const TSA = 'http://tsp.pki.gov.kz/';
@@ -51,12 +54,10 @@ const revocationUrl = url => /^https?:/.test(url) && NCA_HOSTS.slice(1).includes
 // crl.root.gov.kz answers a "page blocked" HTML for the HeadlessChrome user agent (2026-11-09).
 const BROWSER_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
 try {
-  context = await chromium.launchPersistentContext(join(folder, 'profile'), {
-    executablePath, headless: true, viewport: { width: 620, height: 790 },
+  // TEGIN_BROWSER selects Playwright Chromium (default), Google Chrome or Microsoft Edge.
+  context = await launchExtension(join(folder, 'profile'), extension, { viewport: { width: 620, height: 790 },
     // Without NCA_LIVE_TSP the real NUC names never resolve, even if a request escaped the route.
-    args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`, '--no-first-run',
-      ...(liveTsp ? [`--user-agent=${BROWSER_UA}`] : [`--host-resolver-rules=${NCA_HOSTS.map(host => `MAP ${host} ~NOTFOUND`).join(', ')}`])]
-  });
+    args: liveTsp ? [`--user-agent=${BROWSER_UA}`] : [`--host-resolver-rules=${NCA_HOSTS.map(host => `MAP ${host} ~NOTFOUND`).join(', ')}`] });
   const errors = [];
   const network = [];
   let tsaStub = null, tsaRequests = 0, tsaStubbed = 0;
@@ -69,8 +70,9 @@ try {
     if (url.startsWith(`http://127.0.0.1:${port}/`) || url.startsWith('chrome-extension:') || (liveTsp && (url === 'http://tsp.pki.gov.kz/' || revocationUrl(url)))) route.continue();
     else route.abort();
   });
-  const sw = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
+  const sw = await extensionWorker(context);
   const extensionId = new URL(sw.url()).host;
+  console.log(`ENV: ${browserName} on ${process.platform} ${process.arch}: ${await browserVersion(context)}`);
   const page = await context.newPage();
   await page.addInitScript(() => {
     window.bridgeMessages = [];
@@ -497,8 +499,8 @@ try {
     '-CAfile', join(folder, 'cert.pem'), '-purpose', 'any', '-out', devNull], { stdio: 'pipe' });
   console.log('PASS: local PAdES-B-B: format choice, PDF pre-check, approval, .signed.pdf download; embedded CMS over ByteRange verified by OpenSSL');
   if (process.env.DSS_VALIDATOR) {
-    const [dssResult] = JSON.parse(execFileSync('java', ['-cp', `${process.env.DSS_VALIDATOR}/classes:${process.env.DSS_VALIDATOR}/lib/*`, 'Validate', signedPdfPath, join(folder, 'cert.pem')], { encoding: 'utf8' })).signatures;
-    const [hankoResult] = JSON.parse(execFileSync('python3', [resolve('tests/independent_pades.py'), 'validate', signedPdfPath, join(folder, 'cert.pem')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).signatures;
+    const [dssResult] = JSON.parse(execFileSync('java', ['-cp', dssClasspath, 'Validate', signedPdfPath, join(folder, 'cert.pem')], { encoding: 'utf8' })).signatures;
+    const [hankoResult] = JSON.parse(execFileSync(PYTHON, [resolve('tests/independent_pades.py'), 'validate', signedPdfPath, join(folder, 'cert.pem')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).signatures;
     assert.equal(dssResult.indication, 'TOTAL_PASSED', JSON.stringify(dssResult)); assert.equal(dssResult.format, 'PAdES-BASELINE-B');
     assert.ok(hankoResult.bottomLine && hankoResult.coverage === 'ENTIRE_FILE' && hankoResult.modificationLevel === 'NONE' && hankoResult.adesBasic === 'PASSED', JSON.stringify(hankoResult));
     console.log('PASS: PDF signed in the browser worker: EU DSS TOTAL_PASSED PAdES-BASELINE-B, pyHanko ENTIRE_FILE without modifications');
@@ -519,8 +521,8 @@ try {
   assert.deepEqual(secondPdf.subarray(0, signedPdf.length), signedPdf, 'first signed revision is byte-identical');
   assert.equal([...secondPdf.toString('latin1').matchAll(/\/ByteRange \[/g)].length, 2);
   if (process.env.DSS_VALIDATOR) {
-    const dssResults = JSON.parse(execFileSync('java', ['-cp', `${process.env.DSS_VALIDATOR}/classes:${process.env.DSS_VALIDATOR}/lib/*`, 'Validate', secondPdfPath, join(folder, 'cert.pem')], { encoding: 'utf8' })).signatures;
-    const hankoResults = JSON.parse(execFileSync('python3', [resolve('tests/independent_pades.py'), 'validate', secondPdfPath, join(folder, 'cert.pem')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).signatures;
+    const dssResults = JSON.parse(execFileSync('java', ['-cp', dssClasspath, 'Validate', secondPdfPath, join(folder, 'cert.pem')], { encoding: 'utf8' })).signatures;
+    const hankoResults = JSON.parse(execFileSync(PYTHON, [resolve('tests/independent_pades.py'), 'validate', secondPdfPath, join(folder, 'cert.pem')], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).signatures;
     assert.ok(dssResults.length === 2 && dssResults.every(item => item.indication === 'TOTAL_PASSED' && !item.modifications && !item.undefinedChanges), JSON.stringify(dssResults));
     assert.deepEqual(hankoResults.map(item => [item.bottomLine, item.coverage, item.modificationLevel]), [[true, 'ENTIRE_REVISION', 'FORM_FILLING'], [true, 'ENTIRE_FILE', 'NONE']]);
   }
@@ -681,6 +683,8 @@ try {
   await popupPage.goto(`chrome-extension://${extensionId}/index.html`);
   await popupPage.screenshot({ path: resolve('artifacts/popup.png'), fullPage: true });
   // Switching modes keeps the same shell and card positions, with navigation at the top.
+  // Branded Chrome does not paint a background tab, so its screenshot would wait forever.
+  await tool.bringToFront();
   for (const width of [1280, 870, 400]) {
     await tool.setViewportSize({ width, height: 900 });
     await tool.locator('#nav-sign').click();
