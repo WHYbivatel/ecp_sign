@@ -16,14 +16,17 @@
     },
     {
       "platform": "chromium",
-      "browsers": ["chrome", "edge"],
-      "version": "0.6.0",
-      "file": "tegin-chromium-0.6.0-5b3eae2.zip",
-      "url": "https://tegin.esl.kz/downloads/tegin-chromium-0.6.0-5b3eae2.zip",
-      "size": 508818,
-      "sha256": "9a773c63d5788efa40ba1b6753263f1a398cdab119f62c7ccf83974ce263f653",
-      "sourceCommit": "5b3eae2",
-      "publishedAt": "2026-11-13",
+      "browsers": [
+        "chrome",
+        "edge"
+      ],
+      "version": "0.6.1",
+      "file": "tegin-chromium-0.6.1-372cffe.zip",
+      "url": "https://tegin.esl.kz/downloads/tegin-chromium-0.6.1-372cffe.zip",
+      "size": 509238,
+      "sha256": "c8e74a4bd23d7a32ee37629eefa34ea5c48b5cbac72ec0047c4295b8f49380a3",
+      "sourceCommit": "372cffe",
+      "publishedAt": "2026-11-18",
       "rollback": {
         "version": "0.5.3",
         "file": "tegin-chromium-0.5.3-dd40b5e.zip",
@@ -35,15 +38,17 @@
     },
     {
       "platform": "firefox",
-      "browsers": ["firefox"],
+      "browsers": [
+        "firefox"
+      ],
       "addonId": "ncabrowser@local.invalid",
-      "version": "0.6.0",
-      "file": "tegin-firefox-0.6.0-5b3eae2.zip",
-      "url": "https://tegin.esl.kz/downloads/tegin-firefox-0.6.0-5b3eae2.zip",
-      "size": 508895,
-      "sha256": "96a15d8f6c781391b9080c2efb756d82bc047d03931d7d685c157dc22adff735",
-      "sourceCommit": "5b3eae2",
-      "publishedAt": "2026-11-13",
+      "version": "0.6.1",
+      "file": "tegin-firefox-0.6.1-372cffe.zip",
+      "url": "https://tegin.esl.kz/downloads/tegin-firefox-0.6.1-372cffe.zip",
+      "size": 509315,
+      "sha256": "6845baee62a49a100cbc6fde7478a9a7278aa2a0bb962f9a55b89056875499db",
+      "sourceCommit": "372cffe",
+      "publishedAt": "2026-11-18",
       "rollback": {
         "version": "0.5.2",
         "file": "tegin-firefox-0.5.2.zip",
